@@ -1,0 +1,1011 @@
+---
+title: "SECREMP - Gorgonians"
+author: "Nick Jones"
+date: "2023-10-31"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+## SECREMP Gorgonian Analysis 2013-2023 for ECRS paper
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(plotrix)
+library(tidyverse)
+library(glmmTMB)
+library(emmeans)
+library(DHARMa)
+library(ggridges)
+library(reshape2)
+library(MASS)
+library(performance)
+library(moments)
+library(devEMF)
+library(tidygam)
+library(tidymv)
+library(mgcv)
+```
+
+### Calculate summary of target gorgs of all sizes
+
+```{r}
+
+gorgs <- read.csv("C:\\Users\\nj350\\OneDrive - Nova Southeastern University\\Documents\\Conferences\\2024\\BEM\\Data\\SECREMP_OCTO_2012-2023.csv")
+
+#gorgs <- read.csv("C:\\Users\\phill\\OneDrive\\Documents\\Nick Working\\2024\\BEM\\Data\\SECREMP_OCTO_2012-2023.csv")
+
+gorgs$Site_name <- as.factor(gorgs$Site_name)
+gorgs$StationID <- as.factor(gorgs$StationID)
+gorgs$fYear <- as.factor(gorgs$Year)
+gorgs$Habitat <- as.factor(gorgs$Habitat)
+gorgs$Subregion <- as.factor(gorgs$Subregion)
+gorgs$SPP_Code <- as.factor(gorgs$SPP_Code)
+
+gorgs <- subset(gorgs, Site_name != "Martin County 1" &
+                  Site_name != "Martin County 2" & 
+                  Site_name != "Palm Beach 1" & 
+                  Site_name != "Broward County A" &
+                  SPP_Code != "PPOR" &
+                  SPP_Code != "ECAL"&
+                  SPP_Code != "PBIP" &
+                  Height_cm < 200)
+                  
+gorgs$Site_name <- droplevels(gorgs$Site_name)
+gorgs$SPP_Code <- droplevels(gorgs$SPP_Code)
+
+gorgs <- subset(gorgs, Year != 2012)
+
+gorgs$SPP_Code <- factor(gorgs$SPP_Code, 
+                                  levels = c("PAME","PFLE", "GVEN"))
+
+gorg_lab <- c("PAME" = "Antillogorgia americana", 
+                 "PFLE" = "Eunicea flexuosa", 
+                 "GVEN" = "Gorgonia ventalina")
+
+gorg.sp.counts <- group_by(gorgs, Year, Subregion, Site_name, StationID, SPP_Code) %>% 
+  count()
+
+station.info <- read.csv("C:\\Users\\nj350\\OneDrive - Nova Southeastern University\\Documents\\Conferences\\2024\\BEM\\Data\\Station Info.csv")
+
+#station.info <- read.csv("C:\\Users\\phill\\OneDrive\\Documents\\Nick Working\\2024\\BEM\\Data\\Station Info.csv")
+
+station.info <- station.info %>%
+  dplyr::select(Site, Station, Transect)
+
+station.info$Site <- as.factor(station.info$Site)
+station.info$Station <- as.factor(station.info$Station)
+station.info$Transect <- as.factor(station.info$Transect)
+
+station.info <- subset(station.info, Site != "Martin County 1" & Site != "Martin County 2" & Site != "Palm Beach 1" & Site != "Broward County A")
+station.info$Site <- droplevels(station.info$Site)
+station.info$Station <- droplevels(station.info$Station)
+
+names(station.info) <- c("Site_name", "StationID", "Transect")
+
+gorg.sp.counts <- left_join(gorg.sp.counts, station.info, by = c("Site_name", "StationID"))
+
+all.gorgs <- expand.grid(Site_name = unique(gorg.sp.counts$Site_name),
+                         Transect = unique(gorg.sp.counts$Transect),
+                         Year = unique(gorg.sp.counts$Year), 
+                         SPP_Code = unique(gorg.sp.counts$SPP_Code))
+
+#merges the expanded grid with the data and says keep all of the levels
+gorg.sp.counts <- merge(all.gorgs, gorg.sp.counts, by = c('Site_name', 'Transect', 'Year', 'SPP_Code'), all.x = TRUE)
+
+#assigns all na values 0 so sites with no colonies have a 0
+gorg.sp.counts$n[is.na(gorg.sp.counts$n)] <- 0
+
+gorg.sp.counts$Density <- gorg.sp.counts$n/10
+
+gorg.sp.counts$Subregion <- factor(gorg.sp.counts$Subregion, levels = c("MC", "PBC", "BC", "DC"))
+
+gorg.over5 <- gorgs %>%
+  subset(Height_cm > 5)%>%
+  group_by(Year, SPP_Code) %>%
+  count()
+
+gorg.total <- gorgs %>%
+  group_by(Year, SPP_Code) %>%
+  count()
+
+density.year <- gorg.sp.counts %>%
+  group_by(Year, SPP_Code) %>%
+  summarise(Mean = mean(Density), SE = std.error(Density))
+
+print(density.year, n = 20)
+
+```
+
+### Gorgonian Recruits - based of juvenile growth rates from Borgstein et al 2020
+
+```{r}
+
+gorgs$Site_name <- as.factor(gorgs$Site_name)
+gorgs$fYear <- as.factor(gorgs$Year)
+gorgs$Habitat <- as.factor(gorgs$Habitat)
+gorgs$Subregion <- as.factor(gorgs$Subregion)
+gorgs$SPP_Code <- as.factor(gorgs$SPP_Code)
+gorgs$StationID <- as.factor(gorgs$StationID)
+
+gorg.recruits <- gorgs %>%
+  subset(Height_cm <= 6 & SPP_Code == "PAME" |
+           Height_cm <= 5 & SPP_Code == "GVEN"|
+           Height_cm <= 4 & SPP_Code == "PFLE")
+
+gorg.rec.counts <- gorg.recruits %>%
+  group_by(Year, Site_name, StationID, Habitat, Subregion, SPP_Code) %>%
+  count()
+
+gorg.rec.counts <- left_join(gorg.rec.counts, station.info, by = c("Site_name", "StationID"))
+
+all.gorg.species <- expand.grid(Site_name = unique(gorg.rec.counts$Site_name), 
+                                Transect = unique(gorg.rec.counts$Transect),
+                                Year = unique(gorg.rec.counts$Year), 
+                                SPP_Code = unique(gorg.rec.counts$SPP_Code))
+
+#merges the expanded grid with the data and says keep all of the levels
+gorg.counts <- merge(all.gorg.species, gorg.rec.counts, by = c('Site_name', 'Transect', 'Year', 'SPP_Code'), all.x = TRUE)
+
+#assigns all na values 0 so sites with no colonies have a 0
+gorg.counts$n[is.na(gorg.counts$n)] <- 0
+
+gorg.counts$Density <- gorg.counts$n/10 #spatial level density
+gorg.counts$Taxa <- "Gorgonian"
+gorg.counts$ID <- paste(gorg.counts$Site, "_", gorg.counts$Transect, "_", gorg.counts$Species)
+
+gorg.counts$ID <- as.factor(gorg.counts$ID)
+
+gorg.counts <- subset(gorg.counts, Site_name != "Palm Beach 1" & Site_name != "Broward County A")
+gorg.counts$Site_name <- droplevels(gorg.counts$Site)
+
+density.gorg.rec <- gorg.counts %>%
+  group_by(Year, SPP_Code) %>%
+  summarise(Mean = mean(Density), SE = std.error(Density))
+names(density.gorg.rec) <- c("Year", "SPP_Code", "Mean", "SE")
+
+density.gorg.rec$Lifestage <- "Recruit"
+```
+
+### Gorgonian adults
+
+```{r}
+
+gorg.sp.adult <- gorgs %>%
+  subset(Height_cm > 6 & SPP_Code == "PAME" |
+           Height_cm > 5 & SPP_Code == "GVEN"|
+           Height_cm > 4 & SPP_Code == "PFLE") %>%
+           group_by(Year, Subregion, Site_name, StationID, SPP_Code) %>% 
+  count()
+
+all.gorgs <- expand.grid(Site_name = unique(gorg.sp.counts$Site_name),
+                         Transect = unique(gorg.sp.counts$Transect),
+                         Year = unique(gorg.sp.counts$Year), 
+                         SPP_Code = unique(gorg.sp.counts$SPP_Code))
+
+#merges the expanded grid with the data and says keep all of the levels
+gorg.sp.adult <- merge(all.gorgs, gorg.sp.counts, by = c('Site_name', 'Transect', 'Year', 'SPP_Code'), all.x = TRUE)
+
+#assigns all na values 0 so sites with no colonies have a 0
+gorg.sp.adult$n[is.na(gorg.sp.adult$n)] <- 0
+
+gorg.sp.adult$Density <- gorg.sp.adult$n/10
+
+gorg.sp.adult$Subregion <- factor(gorg.sp.adult$Subregion, levels = c("MC", "PBC", "BC", "DC"))
+
+density.all <- gorg.sp.adult %>%
+  group_by(SPP_Code) %>%
+  summarise(Mean = mean(Density), SE = std.error(Density))
+
+print(density.all)
+
+density.year <- gorg.sp.adult %>%
+  group_by(Year, SPP_Code) %>%
+  summarise(Mean = mean(Density), SE = std.error(Density))
+
+print(density.year)
+
+density.year$Lifestage <- "Adult"
+
+```
+
+### Gorg Recruit and adult Density Figure
+
+```{r}
+
+density.all.gorg <- rbind(density.year, density.gorg.rec)
+
+library(scales)
+hue_pal()(4)
+
+cols <- c("#7CAE00", "#00BFC4", "#C77CFF")
+
+ggplot(density.all.gorg, aes(x = Year, y = Mean, lty = Lifestage))+
+  geom_line(stat = "identity", size = 1)+
+  scale_y_continuous(expand = c(0, 0)) +
+#  geom_vline(xintercept = c(2010, 2012), lty = 2, colour = "deepskyblue1", size = 1)+
+  facet_wrap(~SPP_Code, labeller = labeller(SPP_Code = gorg_lab), nrow = 1)+
+    labs(y = bquote('Density' ~~ ('colonies'~~ m^-2)), x = "")+
+  scale_x_continuous(breaks = c(2003, 2005, 2007, 2009, 2011, 2013, 2015, 2017, 2019, 2021, 2023))+
+     theme_bw()+ 
+  theme(axis.text.y = element_text(size = 12, hjust = 1, colour = "black"),
+        axis.title.x = element_blank(), 
+        axis.title.y = element_text(size = 16), 
+        axis.text.x = element_text(size = 12, colour = "black",angle = 45, vjust = 1, hjust = 0.8),
+        plot.margin = margin(rep(15, 4)), 
+        axis.line = element_line(size = 0.5), 
+        axis.ticks = element_line(size = 0.5), 
+        panel.grid.major.x = element_blank(), 
+        strip.text = element_text(size = 10, face = "bold.italic"), 
+        strip.background = element_rect(size=0.5),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        strip.text.y = element_blank(),
+        legend.position = c(0.9, 0.9),
+        legend.title = element_blank(),
+        legend.text = element_text(size = 16))+
+ geom_errorbar(aes(ymin = Mean-SE, ymax = Mean+SE, x = Year), color = "Black",
+                size = 0.5, width = 0.25, alpha = 0.5)+
+    geom_segment(aes(x = 2014.5, y = 0, xend = 2014.5, yend = 1.5), 
+               lty = 3, colour = "red", size = 1)+
+   geom_segment(aes(x = 2015.5, y = 0, xend = 2015.5, yend = 1.5), 
+               lty = 3, colour = "red", size = 1)+
+  geom_segment(aes(x = 2022.5, y = 0, xend = 2022.5, yend = 1.5), 
+               lty = 3, colour = "red", size = 1)+
+  geom_segment(aes(x = 2017.7, y = 0, xend = 2017.7, yend = 1.5), 
+               lty = 2, colour = "deepskyblue1", size = 1)+
+    geom_segment(aes(x = 2022.7, y = 0, xend = 2022.7, yend = 1.5), 
+               lty = 2, colour = "deepskyblue1", size = 1)
+
+#ggsave(file = "Gorg and recruit Density.png", width = 7, height = 5, dpi = 300)
+
+```
+
+### Model Temporal change in gorgonians
+
+```{r}
+
+gorg.sp.adult$fYear <- as.factor(gorg.sp.adult$Year)
+gorg.sp.adult$Site_name <- as.factor(gorg.sp.adult$Site_name)
+
+gorg.rel.change <- group_by(gorg.sp.adult, fYear, SPP_Code) %>% 
+  summarise(n = sum(n)) %>%
+  subset(fYear == "2013" | fYear == "2018" | fYear == "2022"|fYear == "2023")
+
+gorg.rel.change <- gorg.rel.change %>% 
+  arrange(SPP_Code, fYear) %>%
+  group_by(SPP_Code) %>%  
+  mutate(Mean_change = (((n - lag(n))/lag(n))*100))
+
+print(gorg.rel.change, n = 30)
+
+```
+
+## Adults
+#### Modelled at station level
+
+### PAME
+
+```{r, fig.show='hide'}
+
+pame <- subset(gorg.sp.adult, SPP_Code == "PAME")
+
+pame$SPP_Code <- droplevels(pame$SPP_Code)
+levels(pame$SPP_Code)
+levels(pame$fYear)
+hist(pame$n)
+class(pame$n)
+
+mod.1.pame <- glmmTMB(n ~ fYear + (1|Site_name/StationID), 
+                          family = poisson, data = pame)
+
+mod.1a.pame <- glmmTMB::glmmTMB(n ~ fYear + (1|Site_name/StationID), 
+                          family = nbinom1(), data = pame)
+
+mod.1b.pame <- glmmTMB::glmmTMB(n ~ fYear + (1|Site_name/StationID), 
+                          family = nbinom2(), data = pame)
+
+AIC(mod.1.pame, mod.1a.pame, mod.1b.pame) #negative binomial fYear, nbinom1 and 2 the same
+
+summary(mod.1a.pame)
+
+sims <- simulateResiduals(mod.1a.pame, n = 1000)
+plot(sims) #looks good
+testDispersion(sims) #dispersion fine
+testOutliers(sims, type = "bootstrap") #no outliers present
+
+r2(mod.1a.pame) 
+
+emm.pame <- emmeans(mod.1a.pame, ~ fYear)
+pairs(emm.pame)
+contrast(emm.pame)
+
+plot(emm.pame, type = "response")
+
+```
+### PFLE
+```{r, fig.show='hide'}
+
+pfle <- subset(gorg.sp.adult, SPP_Code == "PFLE")
+
+pfle$SPP_Code <- droplevels(pfle$SPP_Code)
+
+mod.1.pfle <- glmmTMB(n ~ fYear + (1|Site_name/StationID), 
+                          family = poisson, data = pfle)
+
+mod.1a.pfle <- glmmTMB::glmmTMB(n ~ fYear + (1|Site_name/StationID), 
+                          family = nbinom1(), data = pfle)
+
+mod.1b.pfle <- glmmTMB::glmmTMB(n ~ fYear + (1|Site_name/StationID), 
+                          family = nbinom2(), data = pfle)
+
+AIC(mod.1.pfle, mod.1a.pfle, mod.1b.pfle) #negative binomial fYear
+
+summary(mod.1b.pfle)
+
+sims <- simulateResiduals(mod.1b.pfle, n = 1000)
+plot(sims) #som evidence of lack of uniformity, but not too bad
+testDispersion(sims) #dispersion fine
+testOutliers(sims, type = "bootstrap") #no outliers present
+
+r2(mod.1b.pfle)
+
+emm.pfle <- emmeans(mod.1b.pfle, ~ fYear)
+pairs(emm.pfle)
+contrast(emm.pfle)
+
+plot(emm.pfle, type = "response")
+
+```
+
+### GVEN
+```{r, fig.show='hide'}
+
+gven <- subset(gorg.sp.adult, SPP_Code == "GVEN")
+gven$SPP_Code <- droplevels(gven$SPP_Code)
+
+mod.1.gven <- glmmTMB(n ~ fYear + (1|Site_name/StationID), 
+                          family = poisson, data = gven)
+
+mod.1a.gven <- glmmTMB::glmmTMB(n ~ fYear + (1|Site_name/StationID), 
+                          family = nbinom1(), data = gven)
+
+mod.1b.gven <- glmmTMB::glmmTMB(n ~ fYear + (1|Site_name/StationID), 
+                          family = nbinom2(), data = gven)
+
+AIC(mod.1.gven, mod.1a.gven, mod.1b.gven) #poisson fYear
+
+summary(mod.1.gven)
+
+sims <- simulateResiduals(mod.1.gven, n = 1000)
+plot(sims) #some evidence of lack of uniformity
+testDispersion(sims) #dispersion fine
+testOutliers(sims, type = "bootstrap") #no outliers present
+
+r2(mod.1.gven) 
+
+emm.gven <- emmeans(mod.1.gven, ~ fYear)
+pairs(emm.gven)
+contrast(emm.gven)
+
+plot(emm.gven, type = "response")
+
+```
+## Recruits
+
+#### Modelled at site level
+
+### PAME recruits
+
+```{r, fig.show='hide'}
+
+gorg.rec.counts$fYear <- as.factor(gorg.rec.counts$Year)
+
+gorg.rec.sum <- gorg.rec.counts %>%
+  group_by(Site_name, SPP_Code, fYear) %>%
+  summarise(Abundance = sum(n))
+
+pame <- subset(gorg.rec.sum, SPP_Code == "PAME")
+
+pame$SPP_Code <- droplevels(pame$SPP_Code)
+
+mod.1.pame <- glmmTMB(Abundance ~ fYear + (1|Site_name), 
+                          family = poisson, data = pame)
+
+mod.1a.pame <- glmmTMB::glmmTMB(Abundance ~ fYear + (1|Site_name), 
+                          family = nbinom1(), data = pame)
+
+mod.1b.pame <- glmmTMB::glmmTMB(Abundance ~ fYear + (1|Site_name), 
+                          family = nbinom2(), data = pame)
+
+AIC(mod.1.pame, mod.1a.pame, mod.1b.pame) #negative binomial fYear
+
+summary(mod.1b.pame)
+
+sims <- simulateResiduals(mod.1b.pame, n = 1000)
+plot(sims) #looks good
+testDispersion(sims) #dispersion fine
+testOutliers(sims, type = "bootstrap") #no outliers present
+
+r2(mod.1b.pame) 
+
+emm.pame <- emmeans(mod.1b.pame, ~ fYear)
+pairs(emm.pame)
+contrast(emm.pame)
+
+plot(emm.pame, type = "response")
+
+```
+
+### PFLE recruits
+```{r, fig.show='hide'}
+
+pfle <- subset(gorg.rec.sum, SPP_Code == "PFLE")
+
+pfle$SPP_Code <- droplevels(pfle$SPP_Code)
+
+mod.1.pfle <- glmmTMB(Abundance ~ fYear + (1|Site_name), 
+                          family = poisson, data = pfle)
+
+mod.1a.pfle <- glmmTMB::glmmTMB(Abundance ~ fYear + (1|Site_name), 
+                          family = nbinom1(), data = pfle)
+
+mod.1b.pfle <- glmmTMB::glmmTMB(Abundance ~ fYear + (1|Site_name), 
+                          family = nbinom2(), data = pfle)
+
+mod.2.pfle <- glmmTMB::glmmTMB(Abundance ~ (1|Site_name), 
+                          family = nbinom2(), data = pfle)
+
+AIC(mod.1.pfle, mod.1a.pfle, mod.1b.pfle, mod.2.pfle) #negative binomial fYear
+
+summary(mod.1.pfle)
+
+sims <- simulateResiduals(mod.1.pfle, n = 1000)
+plot(sims) #som evidence of lack of heterogeneity in residuals at high values
+testDispersion(sims) #dispersion fine
+testOutliers(sims, type = "bootstrap") #no outliers present
+
+r2(mod.1.pfle) 
+
+emm.pfle <- emmeans(mod.1.pfle, ~ fYear)
+pairs(emm.pfle)
+contrast(emm.pfle)
+
+plot(emm.pfle, type = "response")
+
+```
+
+### GVEN recruits
+```{r, fig.show='hide'}
+
+gven <- subset(gorg.rec.sum, SPP_Code == "GVEN")
+gven$SPP_Code <- droplevels(gven$SPP_Code)
+
+mod.1.gven <- glmmTMB(Abundance ~ fYear + (1|Site_name), 
+                          family = poisson, data = gven)
+
+mod.1a.gven <- glmmTMB::glmmTMB(Abundance ~ fYear + (1|Site_name), 
+                          family = nbinom1(), data = gven)
+
+mod.1b.gven <- glmmTMB::glmmTMB(Abundance ~ fYear + (1|Site_name), 
+                          family = nbinom2(), data = gven)
+
+AIC(mod.1.gven, mod.1a.gven, mod.1b.gven) #poisson fYear
+
+summary(mod.1b.gven)
+
+sims <- simulateResiduals(mod.1b.gven, n = 1000)
+plot(sims) #some heterogeneity and lack of uniformity
+testDispersion(sims) #dispersion fine
+testOutliers(sims, type = "bootstrap") #no outliers present
+
+r2(mod.1b.gven)
+
+emm.gven <- emmeans(mod.1b.gven, ~ fYear)
+pairs(emm.gven)
+contrast(emm.gven)
+
+plot(emm.gven, type = "response")
+
+```
+
+### Change in gorg abundance vs recruits - used for talks
+
+```{r}
+
+#calculate relative change every year
+Relative_Change.all <- gorg.sp.adult %>%
+    arrange(SPP_Code, Site_name, Year) %>% group_by(Site_name, SPP_Code) %>%  
+  mutate(Adult.rel.change = (((n - lag(n))/lag(n))*100),
+         Adult.abs.change = (n-lag(n))) %>%
+  na.omit()
+
+#sum adults by site before calculating
+gorg.site <- gorg.sp.adult %>%
+  group_by(Year, Site_name,SPP_Code) %>%
+  summarise(n = sum(n))
+
+#calculate relative change 2018-2022
+
+Relative_Change <- gorg.site %>% subset(Year > 2017 & Year < 2023) %>%
+    arrange(SPP_Code, Site_name,Year) %>% group_by(Site_name, SPP_Code) %>%  
+  mutate(Adult.rel.change = (((n - lag(n))/lag(n))*100),
+         Adult.abs.change = (n-lag(n))) %>%
+  na.omit()
+
+Relative_Change$Adult.rel.change[!is.finite(Relative_Change$Adult.rel.change)] <- 0
+
+#add mean colony height and then join dataframes
+Mean.Length.change <- gorgs %>%
+  subset(Year > 2017 & Year < 2023) %>%
+  group_by(Site_name, Year, SPP_Code) %>% 
+  summarise(Height = mean(Height_cm))
+
+Relative_Change <- left_join(Relative_Change, Mean.Length.change, by = c("Site_name", "Year", "SPP_Code"))
+
+gorg.rec.counts.18 <- subset(gorg.rec.counts, Year > 2017 & Year < 2023)
+names(gorg.rec.counts.18) <- c("Year", "Site_name", "StationID", "Habitat", "Subregion", "SPP_Code", "Rec.n", "Transect", "fYear")
+
+which(is.na(gorg.rec.counts.18))
+
+#sum recruits by site adn then calculate relative change
+gorg.rec.counts.18.site <- gorg.rec.counts.18 %>%
+  group_by(Year, Site_name, SPP_Code) %>%
+  summarise(Rec.n = sum(Rec.n))
+
+Relative_Change <- left_join(Relative_Change, gorg.rec.counts.18.site, by = c("Site_name", "Year", "SPP_Code"))
+Relative_Change$Rec.n[is.na(Relative_Change$Rec.n)] <- 0
+
+plot.1 <- ggplot(Relative_Change)+
+  geom_point(aes(x = lag(Rec.n), y = Adult.abs.change), size = 2, colour = "gray")+
+    geom_point(aes(x = lag(Rec.n), y = Adult.abs.change), shape= 1, size = 2, colour = "black")+ #adds black border to points
+  geom_hline(yintercept = 0, linetype = 3, size = 1) + 
+  labs(y = bquote('Change in Adult colony abundance'), x = "Recruit Abundance") +
+scale_y_continuous(limits = c(-45,90))+
+ geom_rug(aes(x = lag(Rec.n), y = Adult.abs.change, colour = SPP_Code))+
+  theme(legend.position = "none", 
+        axis.title.y = element_text(size = 10, colour = "black"),
+        axis.text.y = element_text(size = 10, hjust = 1, colour = "black"),  
+        axis.text.x = element_text(size = 10, hjust = 1, colour = "black"),
+        axis.title.x = element_text(size = 10, colour = "black"),
+        axis.line = element_line(colour = "black", size = 0.5), 
+        axis.ticks = element_blank(),
+        panel.border =  element_rect(size = 0.5, colour = "black", fill = NA),
+        plot.margin = ggplot2::margin(0,0),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        strip.background = element_blank(),
+        strip.text = element_text(size = 12),
+        panel.background = element_blank())
+
+plot.2 <- ggplot(Relative_Change)+
+  geom_point(aes(x = Rec.n, y = Height), size = 2, colour = "gray")+
+    geom_point(aes(x = Rec.n, y = Height), shape= 1, size = 2, colour = "black")+ #adds black border to points
+  labs(y = bquote('Mean Adult Colony Diameter (cm)'), x = "Recruit Abundance") +
+#  scale_y_continuous(limits = c(-25,40), sec.axis = sec_axis(~.*2, name = "Recruit Abundance"))+
+ geom_rug(aes(x = Rec.n, y = Height, colour = SPP_Code))+
+  theme(legend.position = c(0.85,0.8),
+        legend.title = element_blank(),
+        axis.title.y = element_text(size = 10, colour = "black"),
+        axis.text.y = element_text(size = 10, hjust = 1, colour = "black"),  
+        axis.text.x = element_text(size = 10, hjust = 1, colour = "black"),
+        axis.title.x = element_text(size = 10, colour = "black"),
+        axis.line = element_line(colour = "black", size = 0.5), 
+        axis.ticks = element_blank(),
+        panel.border =  element_rect(size = 0.5, colour = "black", fill = NA),
+        plot.margin = ggplot2::margin(0,0),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        strip.background = element_blank(),
+        strip.text = element_text(size = 12),
+        panel.background = element_blank())
+
+fig.gorg.rec <- gridExtra::grid.arrange(plot.1,
+                        plot.2, ncol = 2)
+
+#ggsave(fig.gorg.rec, file = "Gorg Adult v recruit.png", width = 7, height = 4, dpi = 300)
+```
+
+### Model recruits vs change in adult abundance - used in talks
+
+```{r, fig.show='hide'}
+
+hist(Relative_Change$Adult.abs.change)
+
+lag.rec <- lag(Relative_Change$Rec.n)
+
+mod.data <- cbind(Relative_Change, lag.rec)
+names(mod.data) <- c("Year", "Site_name", "SPP_Code", "n", "Adult.rel.change", "Adult.abs.change","Height", "Rec.n", "lag.rec")
+
+mod.data <- mod.data %>%
+  dplyr::select(Site_name, Year, SPP_Code, n, Adult.abs.change, Height, Rec.n, lag.rec)
+
+mod.data2 <- na.omit(mod.data) 
+
+mod.1 <- lme(Adult.abs.change ~ lag.rec * SPP_Code, random = ~1|Site_name, data = mod.data2)
+mod.2 <- lme(Adult.abs.change ~ lag.rec + SPP_Code, random = ~1|Site_name, data = mod.data2)
+mod.3 <- lme(Adult.abs.change ~ lag.rec , random = ~1|Site_name, data = mod.data2)
+
+AIC(mod.1, mod.2, mod.3) #mod.1 is best
+
+resids.min <- resid(mod.1, type = "normalized")
+summary(resids.min)
+fit <- fitted(mod.1)
+summary(fit)
+plot(x = fit, y = resids.min) #reasonably well distributed
+hist(resids.min) #relatively normal distribution in residuals
+coplot(resids.min ~ lag.rec|SPP_Code, data=mod.data2) #reasonably well distributed
+
+summary(mod.1)
+anova(mod.1) #sig increasing relationship between recruits in year n and change in adult colony abundance
+
+pred.mod <- predict(mod.1)
+pred.df <- data.frame(mod.data2, pred.mod)
+
+ggplot(pred.df, aes(x = lag.rec, y = pred.mod))+
+  geom_smooth(position = "dodge", size = 1.5, linetype = "dashed") +
+  facet_wrap(~SPP_Code)
+
+emtrends(mod.1, ~ SPP_Code, var = "lag.rec")
+emmip(mod.1, SPP_Code ~ lag.rec, cov.reduce = range)
+
+plot.mod.1 <- ggplot(pred.df)+
+  geom_point(aes(x = lag.rec, y = Adult.abs.change), size = 2, colour = "gray")+
+    geom_point(aes(x = lag.rec, y = Adult.abs.change), shape= 1, size = 2, colour = "black")+ #adds black border to points
+    geom_smooth(aes(x = lag.rec, y = pred.mod), position = "dodge", size = 1.5, linetype = "dashed") +
+  geom_hline(yintercept = 0, linetype = 3, size = 1) + 
+  labs(y = bquote('Change in Adult colony abundance'), x = "Recruit Abundance") +
+scale_y_continuous(limits = c(-45,90))+
+ geom_rug(aes(x = lag.rec, y = Adult.abs.change, colour = SPP_Code))+
+  theme(legend.position = "none", 
+        axis.title.y = element_text(size = 10, colour = "black"),
+        axis.text.y = element_text(size = 10, hjust = 1, colour = "black"),  
+        axis.text.x = element_text(size = 10, hjust = 1, colour = "black"),
+        axis.title.x = element_text(size = 10, colour = "black"),
+        axis.line = element_line(colour = "black", size = 0.5), 
+        axis.ticks = element_blank(),
+        panel.border =  element_rect(size = 0.5, colour = "black", fill = NA),
+        plot.margin = ggplot2::margin(0,0),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        strip.background = element_blank(),
+        strip.text = element_text(size = 12),
+        panel.background = element_blank())
+
+plot.mod.2 <- ggplot(Relative_Change)+
+  geom_point(aes(x = Rec.n, y = Height), size = 2, colour = "gray")+
+    geom_point(aes(x = Rec.n, y = Height), shape= 1, size = 2, colour = "black")+ #adds black border to points
+  labs(y = bquote('Mean Adult Colony Diameter (cm)'), x = "Recruit Abundance") +
+#  scale_y_continuous(limits = c(-25,40), sec.axis = sec_axis(~.*2, name = "Recruit Abundance"))+
+ geom_rug(aes(x = Rec.n, y = Height, colour = SPP_Code))+
+  theme(legend.position = c(0.85,0.8),
+        legend.title = element_blank(),
+        axis.title.y = element_text(size = 10, colour = "black"),
+        axis.text.y = element_text(size = 10, hjust = 1, colour = "black"),  
+        axis.text.x = element_text(size = 10, hjust = 1, colour = "black"),
+        axis.title.x = element_text(size = 10, colour = "black"),
+        axis.line = element_line(colour = "black", size = 0.5), 
+        axis.ticks = element_blank(),
+        panel.border =  element_rect(size = 0.5, colour = "black", fill = NA),
+        plot.margin = ggplot2::margin(0,0),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        strip.background = element_blank(),
+        strip.text = element_text(size = 12),
+        panel.background = element_blank())
+
+fig.gorg.mod <- gridExtra::grid.arrange(plot.mod.1,
+                        plot.mod.2, ncol = 2)
+
+#ggsave(fig.gorg.mod, file = "Gorg Adult v recruit model.png", width = 7, height = 4, dpi = 300)
+
+```
+
+### Size Structure
+
+#### Analysed at site level
+
+```{r}
+
+ggplot(gorgs, aes(x = log10(Height_cm), y = fYear, fill = SPP_Code))+
+  geom_density_ridges(alpha = 0.75, quantile_lines=TRUE,
+                      quantile_fun=function(x,...)mean(x))+
+#  geom_vline(xintercept = 10, lty = 2)+
+  facet_wrap(~SPP_Code, nrow = 1, labeller = labeller(SPP_Code = gorg_lab))+
+ # geom_text(aes(label = n, y = fYear), position = position_dodge(width = 0.9), vjust = 1, size = 3)+
+  theme_bw()+
+  theme(legend.position = "none",
+        axis.text.y = element_text(size = 12, hjust = 1, colour = "black"),
+        axis.title.x = element_text(size = 16, colour = "black"), 
+        axis.title.y = element_blank(), 
+        axis.text.x = element_text(size = 12, colour = "black"),
+        plot.margin = margin(rep(15, 4)), 
+        axis.line = element_line(size = 0.5), 
+        axis.ticks = element_blank(), 
+        panel.grid.major.x = element_blank(), 
+        strip.text = element_text(size = 14, face = "bold.italic"), 
+        strip.background = element_rect(size=0.5, fill = "lightgrey"),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        strip.text.y = element_blank())+
+      labs(x = "log10(Colony Height) (cm)")+
+      scale_fill_manual(values = c("palegreen3", "palegreen3", "palegreen3"))
+
+  scale_x_continuous(limits = c(-10, 100), breaks = c(0, 50, 100))
+
+
+#ggsave(file = "Gorg Size Structure.png", width = 8, height = 6, dpi = 300)
+
+
+```
+
+```{r}
+
+Mean.Height.sp <- group_by(gorgs, fYear, Site_name, SPP_Code) %>% 
+  summarise(Height = mean(Height_cm), 
+            SE.Height = std.error(Height_cm), 
+            SD.Height = sd(Height_cm),
+            Max = max(Height_cm), 
+            Median = median(Height_cm), 
+            CV = (sd(log10(Height_cm))/mean(log10(Height_cm)))*100, #low indicates little variation, high indicates highly variable
+            Skew = skewness(log10(Height_cm)),# measures level of asymmetry positive = more small colonies, negative = more large colonies
+            Kurt = kurtosis(log10(Height_cm)))%>%
+  na.omit()
+
+#annual mean per species
+
+Mean.Height.sp %>%
+  group_by(SPP_Code) %>%
+  summarise(Height = mean(Height), 
+            CV = mean(CV),
+            Skew = mean(Skew),
+            Kurt = mean(Kurt))
+
+Mean.Height.sp %>%
+  group_by(SPP_Code, fYear) %>%
+  summarise(SE.L = std.error(Height), 
+            SE.CV = std.error(CV),
+            SE.Skew = std.error(Skew),
+            SE.Kurt = std.error(Kurt))
+
+```
+
+### Analyse interspecific and temporal variation in length, CV, skew, kurtosis
+
+#### CV
+```{r, fig.show='hide'}
+
+ggplot(Mean.Height.sp)+
+  geom_histogram(aes(x = CV))+
+  facet_wrap(~SPP_Code)
+
+cv.mod1 <- glmmTMB(CV ~ SPP_Code * fYear + (1|Site_name), family = gaussian(identity), data = Mean.Height.sp)
+
+cv.mod2 <- glmmTMB(CV ~ SPP_Code + fYear + (1|Site_name), family = gaussian(identity), data = Mean.Height.sp)
+
+cv.mod3 <- glmmTMB(CV ~ SPP_Code + (1|Site_name), family = gaussian(identity), data = Mean.Height.sp)
+
+cv.mod4 <- glmmTMB(CV ~ fYear + (1|Site_name), family = gaussian(identity), data = Mean.Height.sp)
+
+cv.mod5 <- glmmTMB(CV ~  (1|Site_name), family = gaussian(identity), data = Mean.Height.sp)
+
+AIC(cv.mod1, cv.mod2, cv.mod3, cv.mod4, cv.mod5)
+
+summary(cv.mod2)
+```
+```{r, fig.show='hide'}
+sims <- simulateResiduals(cv.mod2, n = 1000)
+plot(sims) #looks pretty good, evidence of outlier
+
+plotResiduals(sims, Mean.Height.sp$fYear)
+plotResiduals(sims, Mean.Height.sp$SPP_Code) 
+
+#heterogeneity by species. Fit variance structure by species
+```
+```{r, fig.show='hide'}
+cv.mod2.var <- glmmTMB(CV ~ SPP_Code + fYear + (1|Site_name), 
+                       family = gaussian(identity), data = Mean.Height.sp, 
+                       dispformula = ~SPP_Code)
+summary(cv.mod2.var)
+
+sims <- simulateResiduals(cv.mod2.var, n = 1000)
+plot(sims) #looks pretty good, some evidence of outliers
+
+plotResiduals(sims, Mean.Height.sp$fYear)
+plotResiduals(sims, Mean.Height.sp$SPP_Code)
+testOutliers(sims) #4 outliers, slightly over the threshold, see what bootstrapping does
+testOutliers(sims, type = "bootstrap")#bootstrapping suggests not too much of a problem. Choose to leave outliers in as I don't want to remove data. See if post-hoc is sensible. Summary and all other diagnostics look fine
+
+res <- recalculateResiduals(sims, group = Mean.Height.sp$fYear)
+testTemporalAutocorrelation(simulationOutput = res, time = unique(Mean.Height.sp$fYear))#no major evidence of temporal autocorrelation
+
+```
+```{r}
+
+r2(cv.mod2) #use model without dispersion formula for R2
+
+emm.cv <- emmeans(cv.mod2.var, ~ fYear)
+pairs(emm.cv, type = "response")
+contrast(emm.cv)
+
+emm.sp <- emmeans(cv.mod2.var, ~ SPP_Code)
+pairs(emm.sp, type = "response")
+contrast(emm.sp)
+```
+#### Skew
+```{r, fig.show='hide'}
+
+ggplot(Mean.Height.sp)+
+  geom_histogram(aes(x = Skew))+
+  facet_wrap(~SPP_Code)
+
+Skew.mod1 <- glmmTMB(Skew ~ SPP_Code * fYear + (1|Site_name), family = gaussian(identity), data = Mean.Height.sp)
+
+Skew.mod2 <- glmmTMB(Skew ~ SPP_Code + fYear + (1|Site_name), family = gaussian(identity), data = Mean.Height.sp)
+
+Skew.mod3 <- glmmTMB(Skew ~ SPP_Code + (1|Site_name), family = gaussian(identity), data = Mean.Height.sp)
+
+Skew.mod4 <- glmmTMB(Skew ~ fYear + (1|Site_name), family = gaussian(identity), data = Mean.Height.sp)
+
+Skew.mod5 <- glmmTMB(Skew ~  (1|Site_name), family = gaussian(identity), data = Mean.Height.sp)
+
+AIC(Skew.mod1, Skew.mod2, Skew.mod3, Skew.mod4, Skew.mod5)
+
+summary(Skew.mod2)
+```
+```{r, fig.show='hide'}
+sims <- simulateResiduals(Skew.mod2, n = 1000)
+plot(sims) #looks pretty good, evidence of outlier
+
+plotResiduals(sims, Mean.Height.sp$fYear)
+plotResiduals(sims, Mean.Height.sp$SPP_Code) 
+
+#looks good overall, maybe some slight variance by species but leave as is for simplicity
+
+res <- recalculateResiduals(sims, group = Mean.Height.sp$fYear)
+testTemporalAutocorrelation(simulationOutput = res, time = unique(Mean.Height.sp$fYear))#no major evidence of temporal autocorrelation
+
+```
+```{r}
+
+r2(Skew.mod2) #use model without dispersion formula for R2
+
+emm.Skew <- emmeans(Skew.mod2, ~ fYear)
+pairs(emm.Skew, type = "response")
+contrast(emm.Skew)
+
+emm.sp <- emmeans(Skew.mod2, ~ SPP_Code)
+pairs(emm.sp, type = "response")
+contrast(emm.sp)
+```
+
+#### Kurtosis
+```{r, fig.show='hide'}
+
+ggplot(Mean.Height.sp)+
+  geom_histogram(aes(x = Kurt))+
+  facet_wrap(~SPP_Code) #compare normal and gamma distributions
+
+Kurt.mod <- glmmTMB(Kurt ~ SPP_Code * fYear + (1|Site_name), family = gaussian(identity), data = Mean.Height.sp)
+
+Kurt.mod.log <- glmmTMB(Kurt ~ SPP_Code * fYear + (1|Site_name), family = gaussian(log), data = Mean.Height.sp)
+
+Kurt.mod1 <- glmmTMB(Kurt ~ SPP_Code * fYear + (1|Site_name), family = Gamma(log), data = Mean.Height.sp)
+
+Kurt.mod2 <- glmmTMB(Kurt ~ SPP_Code + fYear + (1|Site_name), family = Gamma(log), data = Mean.Height.sp)
+
+Kurt.mod3 <- glmmTMB(Kurt ~ SPP_Code + (1|Site_name), family = Gamma(log), data = Mean.Height.sp)
+
+Kurt.mod4 <- glmmTMB(Kurt ~ fYear + (1|Site_name), family = Gamma(log), data = Mean.Height.sp)
+
+Kurt.mod5 <- glmmTMB(Kurt ~  (1|Site_name), family = Gamma(log), data = Mean.Height.sp)
+
+AIC(Kurt.mod, Kurt.mod.log, Kurt.mod1, Kurt.mod2, Kurt.mod3, Kurt.mod4, Kurt.mod5)
+
+summary(Kurt.mod3)
+```
+
+```{r, fig.show='hide'}
+sims <- simulateResiduals(Kurt.mod3, n = 1000)
+plot(sims) #evidence of heterogeneity in variance adn outliers, fitting dispformula may fix issues
+plotResiduals(sims, Mean.Height.sp$SPP_Code) 
+
+Kurt.mod3.var <- glmmTMB(Kurt ~ SPP_Code + (1|Site_name), 
+                       family = Gamma(log), data = Mean.Height.sp, 
+                       dispformula = ~SPP_Code)
+summary(Kurt.mod3.var)
+
+sims <- simulateResiduals(Kurt.mod3.var, n = 1000)
+plot(sims) #looks good
+
+res <- recalculateResiduals(sims, group = Mean.Height.sp$fYear)
+testTemporalAutocorrelation(simulationOutput = res, time = unique(Mean.Height.sp$fYear))#no major evidence of temporal autocorrelation
+
+```
+
+```{r}
+
+r2(Kurt.mod3) #use model without dispersion formula for R2
+
+emm.sp <- emmeans(Kurt.mod3.var, ~ SPP_Code)
+pairs(emm.sp)
+contrast(emm.sp)
+```
+
+#### Height
+```{r, fig.show='hide'}
+
+ggplot(gorgs)+
+  geom_histogram(aes(x = Height_cm))+
+  facet_wrap(~SPP_Code) #compare normal and gamma distributions
+
+ggplot(gorgs, aes(x = fYear, y = Height_cm))+
+  geom_point()+
+  geom_smooth(position = "dodge")+
+  facet_wrap(~SPP_Code)
+
+summary(gorgs)
+
+Height.mod <- glmmTMB(Height_cm ~ SPP_Code * fYear + (1|Site_name), family = gaussian(identity), data = gorgs)
+
+Height.mod.log <- glmmTMB(Height_cm ~ SPP_Code * fYear + (1|Site_name), family = gaussian(log), data = gorgs)
+
+Height.mod1 <- glmmTMB(Height_cm ~ SPP_Code * fYear + (1|Site_name), family = Gamma(log), data = gorgs)
+
+Height.mod2 <- glmmTMB(Height_cm ~ SPP_Code + fYear + (1|Site_name), family = Gamma(log), data = gorgs)
+
+Height.mod3 <- glmmTMB(Height_cm ~ SPP_Code + (1|Site_name), family = Gamma(log), data = gorgs)
+
+Height.mod4 <- glmmTMB(Height_cm ~ fYear + (1|Site_name), family = Gamma(log), data = gorgs)
+
+Height.mod5 <- glmmTMB(Height_cm ~  (1|Site_name), family = Gamma(log), data = gorgs)
+
+AIC(Height.mod, Height.mod.log, Height.mod1, Height.mod2, Height.mod3, Height.mod4, Height.mod5)
+
+summary(Height.mod1)
+```
+
+```{r, fig.show='hide'}
+sims <- simulateResiduals(Height.mod1, n = 1000)
+plot(sims) #evidence of heterogeneity in variance adn outliers, fitting dispformula makes no difference
+plotResiduals(sims, gorgs$SPP_Code) #looks like high variance in dispersion by species
+#need to recalculate residuals by random effect due to amount of data, may still be too many outliers
+
+resids.site <- recalculateResiduals(sims, group = gorgs$Site_name)
+plot(resids.site)#appear to be some outliers messing things up, actually seems to be saying there are no outliers which is odd with so much data
+plotResiduals(resids.site, resids.site$SPP_Code) 
+testOutliers(resids.site, type = "bootstrap")#fine when bootstrapped, i.e., random sampling with replacement to measure accuracy
+
+res <- recalculateResiduals(sims, group = gorgs$fYear)
+testTemporalAutocorrelation(simulationOutput = res, time = unique(gorgs$fYear)) #evidence of temporal autocorrelation
+
+```
+```{r, fig.show='hide'}
+
+Height.mod1.ar1 <- glmmTMB(Height_cm ~ SPP_Code * fYear + (1|Site_name) + ar1(fYear-1|Site_name), 
+                       family = Gamma(log), data = gorgs)
+
+Height.mod1.ar1.var <- glmmTMB(Height_cm ~ SPP_Code * fYear + (1|Site_name) + ar1(fYear-1|Site_name),  family = Gamma(log), data = gorgs, 
+                               dispformula = ~SPP_Code)
+
+AIC(Height.mod1.ar1, Height.mod1.ar1.var)
+summary(Height.mod1.ar1.var)
+
+
+
+```
+
+```{r}
+r2(Height.mod1) #use model without dispersion formula for R2
+
+emm.gorg <- emmeans(Height.mod1.ar1.var, ~ fYear|SPP_Code)
+pairs(emm.gorg)
+contrast(emm.gorg)
+
+emm.sp <- emmeans(Height.mod1.ar1.var, ~ SPP_Code)
+pairs(emm.sp)
+contrast(emm.sp)
+```
