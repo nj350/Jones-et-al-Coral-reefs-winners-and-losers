@@ -1,0 +1,266 @@
+---
+title: "MDS with Convex Hull"
+author: "Nick Jones"
+date: "2024-06-18"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(plotrix)
+library(tidyverse)
+library(vegan)
+library(grid)
+library(cluster)
+library(devEMF)
+
+```
+
+### Import Data and data manipulation
+
+```{r}
+
+data <- read.csv("C:\\Users\\nj350\\OneDrive - Nova Southeastern University\\Documents\\Conferences\\2024\\ECRS\\R\\Cover 2003-2022.csv",
+#                 row.names = "ID")
+
+#data <- read.csv("C:\\Users\\phill\\OneDrive\\Documents\\Nick Working\\2024\\ECRS\\R\\Cover 2003-2022.csv",
+                 row.names = "ID")
+
+data.2 <- subset(data, SiteID != "90" & 
+                   SiteID != "84" &
+                   SiteID != "94" &
+                   SiteID != "95" &
+                   Year == 2003|
+                   SiteID != "90" & 
+                   SiteID != "84" &
+                   SiteID != "94" &
+                   SiteID != "95" &
+                   Year == 2006|
+                  SiteID != "90" & 
+                   SiteID != "84" &
+                   SiteID != "94" &
+                   SiteID != "95" &
+                   Year == 2013|
+                   SiteID != "90" & 
+                   SiteID != "84" &
+                   SiteID != "94" &
+                   SiteID != "95" &
+                   Year == 2018|
+                   SiteID != "90" & 
+                   SiteID != "84" &
+                   SiteID != "94" &
+                   SiteID != "95" &
+                   Year == 2022)
+
+data.18.22 <- subset(data, 
+                   SiteID != "90" & 
+                   SiteID != "84" &
+                   SiteID != "94" &
+                   SiteID != "95" &
+                   Year == 2018|
+                   SiteID != "90" & 
+                   SiteID != "84" &
+                   SiteID != "94" &
+                   SiteID != "95" &
+                   Year == 2022)
+
+#sqrt data and average by site
+cover.data <- data.2 %>% group_by(SiteID, Year) %>%
+  summarise(Stony.Coral = sqrt(mean(Stony.Coral)),
+            Octocoral = sqrt(mean(Octocoral)),
+             Sponge = sqrt(mean(Sponge)),
+            Turf = sqrt(mean(Algal.Turf.Sed)),
+            Macro = sqrt(mean(Macro.Cyano)),
+            Zoanthid = sqrt(mean(Zoanthid)),
+            Other = sqrt(mean(Others)))
+
+cover.data.18.22 <- data.18.22 %>% group_by(SiteID, Year) %>%
+  summarise(Stony.Coral = sqrt(mean(Stony.Coral)),
+            Octocoral = sqrt(mean(Octocoral)),
+             Sponge = sqrt(mean(Sponge)),
+            Turf = sqrt(mean(Algal.Turf.Sed)),
+            Macro = sqrt(mean(Macro.Cyano)),
+            Zoanthid = sqrt(mean(Zoanthid)),
+            Other = sqrt(mean(Others)))
+
+
+```
+
+### Create MDS with Bray Curtis resemblance matrix
+
+```{r}
+
+ord <- metaMDS(comm = cover.data[3:9], distance = "bray", k = 2, try = 999)
+ord #stress = 0.14
+
+### extract points for MDS and then add site and years
+
+MDSxy <- data.frame(ord$points)
+MDSxy$Site <- cover.data$SiteID
+MDSxy$Year <- as.factor(cover.data$Year)
+
+#extract vector loadings
+ord$species
+
+MDS_taxa <- tibble::rownames_to_column(
+    data.frame(ord$species),  var="species")
+
+taxa.lab <- c("Stony.Coral" = "Stony Coral",
+              "Octocoral" = "Octocoral",
+              "Sponge" = "Sponge",
+              "Turf" = "Turf/Sediment",
+              "Macro" = "Macro/Cyano", 
+              "Zoanthid" = "Zoanthid",
+              "Other" = "Other fauna")
+
+MDS_taxa$taxa <- taxa.lab
+
+```
+
+### MDS plot
+
+```{r}
+
+#calculate convex hull which encompasses years
+hull <- MDSxy %>%
+  group_by(Year) %>%
+  dplyr::slice(chull(MDS1, MDS2))
+
+#MDS plot - geom_path optionally adds site trajectories (with a black border and indianred1 fill), geom_polygon adds convex hulls, geom_ssegment adds MDS vectors, geom_text adds taxa labels, annotate adds stress text
+
+ggplot(MDSxy, aes(x = MDS1, y = MDS2, colour = Year))+
+  geom_point(size = 2)+
+#  geom_path(aes(group = Site, x = MDS1, y = MDS2), linewidth = 1.2, colour = "black", 
+#           arrow = arrow(length = unit(0.5, 'cm')))+
+#   geom_path(aes(group = Site, x = MDS1, y = MDS2), linewidth = 1, colour = "indianred1", 
+#           arrow = arrow(length = unit(0.5, 'cm')))+
+  scale_y_continuous(breaks = c(-0.25, 0.00, 0.25))+
+  geom_polygon(hull, mapping = aes(x = MDS1, y = MDS2, fill = Year, lty = Year), alpha = 0.2)+
+  geom_segment(data = MDS_taxa, aes(x = 0, xend = MDS1, 
+                     y = 0, yend = MDS2), 
+                 arrow = arrow(length = unit(0.2, "cm")), 
+                 lwd = 0.5,
+                 colour="black")+
+    geom_text(data = MDS_taxa, aes(x = MDS1*1.1, y = MDS2*1.1, 
+                  label = taxa), 
+              position = "nudge", size = 4, colour = "black",
+              check_overlap = FALSE)+
+  annotate("text", x = 0.3, y = -0.4, label = paste("Stress = 0.14"), colour = "black")+
+      theme_bw()+
+  theme(legend.position = c(0.93, 0.2),
+        legend.title = element_blank(),
+        legend.text = element_text(size = 12),
+        plot.title = element_text(hjust = 0.1),
+        axis.title.y = element_text(size = 14),
+        axis.text.y = element_text(size = 12, hjust = 1, colour = "black"),  
+        axis.text.x = element_text(size = 12, colour = "black"), 
+        axis.title.x = element_text(size = 14), 
+        axis.line = element_line(linewidth = 0.5), 
+        axis.ticks = element_blank(),
+        plot.margin = ggplot2::margin(12,6),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank())+
+  scale_fill_manual(values = c("tomato", "royalblue4","#00B0F6", "goldenrod", "seagreen"))+
+  
+  scale_colour_manual(values = c("tomato", "royalblue4","#00B0F6", "goldenrod", "seagreen"))+
+  labs(y = "nMDS2", x = "nMDS1")+
+  scale_linetype_manual(values = c(1,2,1,2,1))
+
+#F8766D
+#00BF7D
+ 
+#ggsave(file = "MDS Benthic Cover.png", width = 8, height = 6, dpi = 300)
+#emf(file = "MDS Benthic Cover.emf", width = 8, height = 6)
+
+
+```
+
+### 2018-2022 changes
+
+```{r}
+
+ord.18 <- metaMDS(comm = cover.data.18.22[3:9], distance = "bray", k = 2, try = 999)
+ord.18 #stress = 0.11
+
+### extract points for MDS and then add site and years
+
+MDSxy.18 <- data.frame(ord.18$points)
+MDSxy.18$Site <- cover.data.18.22$SiteID
+MDSxy.18$Year <- as.factor(cover.data.18.22$Year)
+
+#extract vector loadings
+ord.18$species
+
+MDS_taxa.18 <- tibble::rownames_to_column(
+    data.frame(ord.18$species),  var="species")
+
+taxa.lab <- c("Stony.Coral" = "Stony Coral",
+              "Octocoral" = "Octocoral",
+              "Sponge" = "Sponge",
+              "Turf" = "Turf/Sediment",
+              "Macro" = "Macro/Cyano", 
+              "Zoanthid" = "Zoanthid",
+              "Other" = "Other fauna")
+
+MDS_taxa.18$taxa <- taxa.lab
+
+```
+
+### MDS plot
+
+```{r}
+
+#calculate convex hull which encompasses years
+hull.18 <- MDSxy.18 %>%
+  group_by(Year) %>%
+  slice(chull(MDS1, MDS2))
+
+#MDS plot - geom_path optionally adds site trajectories (with a black border and indianred1 fill), geom_polygon adds convex hulls, geom_ssegment adds MDS vectors, geom_text adds taxa labels, annotate adds stress text
+
+ggplot(MDSxy, aes(x = MDS1, y = MDS2, colour = Year))+
+  geom_point(size = 3)+
+ geom_path(aes(group = Site, x = MDS1, y = MDS2), linewidth = 1.2, colour = "black", 
+          arrow = arrow(length = unit(0.5, 'cm')))+
+   geom_path(aes(group = Site, x = MDS1, y = MDS2), linewidth = 1, colour = "indianred1", 
+          arrow = arrow(length = unit(0.5, 'cm')))+
+  scale_y_continuous(breaks = c(-0.25, 0.00, 0.25))+
+#  geom_polygon(hull.18, mapping = aes(x = MDS1, y = MDS2, fill = Year), alpha = 0.2)+
+ # geom_segment(data = MDS_taxa, aes(x = 0, xend = MDS1, 
+  #                   y = 0, yend = MDS2,
+   #                 color = species), 
+    #             arrow = arrow(length = unit(0.2, "cm")), 
+     #            lwd = 1,
+      #           colour="grey") +
+    geom_text(data = MDS_taxa, aes(x = MDS1*1.1, y = MDS2*1.1, 
+                  label = taxa), 
+              position = "nudge", size = 4, colour = "black",
+              check_overlap = FALSE)+
+  annotate("text", x = 0.3, y = -0.4, label = paste("Stress = 0.14"), colour = "black")+
+      theme_bw()+
+  theme(legend.position = c(0.93, 0.2),
+        legend.title = element_blank(),
+        legend.text = element_text(size = 12),
+        plot.title = element_text(hjust = 0.1),
+        axis.title.y = element_text(size = 14),
+        axis.text.y = element_text(size = 12, hjust = 1, colour = "black"),  
+        axis.text.x = element_text(size = 12, colour = "black"), 
+        axis.title.x = element_text(size = 14), 
+        axis.line = element_line(linewidth = 0.5), 
+        axis.ticks = element_blank(),
+        plot.margin = ggplot2::margin(12,6),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank())+
+    labs(y = "nMDS2", x = "nMDS1")+
+    scale_colour_manual(values = c("tomato", "royalblue4","#00B0F6", "goldenrod", "seagreen"))
+
+
+#ggsave(file = "Fig S1. MDS site trajectories.png", width = 8, height = 6, dpi = 300)
+#emf(file = "MDS Benthic Cover alt.emf", width = 8, height = 6)
+
+
+```

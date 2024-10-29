@@ -1,0 +1,51 @@
+PERMANOVA
+Permutational MANOVA
+
+Resemblance worksheet
+Name: Resem13
+Data type: Similarity
+Selection: All
+Transform: Square root
+Resemblance: S17 Bray-Curtis similarity
+
+Sums of squares type: Type III (partial)
+Fixed effects sum to zero for mixed terms
+Permutation method: Permutation of residuals under a reduced model
+Number of permutations: 9999
+
+Factors
+Name	Abbrev.	Type	Levels
+Year	Ye	Fixed	    20
+Site_name	Si	Fixed	    18
+
+PERMANOVA table of results
+	    	          	      	        	       	Unique
+Source	  df	        SS	    MS	Pseudo-F	P(perm)	 perms
+Ye	  19	     31879	1677.8	  30.084	 0.0001	  9872
+Si	  17	     88753	5220.8	  93.609	 0.0001	  9871
+YexSi**	 235	     32792	139.54	   2.502	 0.0001	  9694
+Res	 816	     45510	55.772	        	       	      
+Total	1087	2.1086E+05	      	        	       	      
+
+** Term has one or more empty cells
+
+Details of the expected mean squares (EMS) for the model
+Source	EMS
+Ye	1*V(Res) + 53.474*S(Ye)
+Si	1*V(Res) + 59.294*S(Si)
+YexSi	1*V(Res) + 4*S(YexSi)
+Res	1*V(Res)
+
+Construction of Pseudo-F ratio(s) from mean squares
+Source	Numerator	Denominator	Num.df	Den.df
+Ye	1*Ye	1*Res	    19	   816
+Si	1*Si	1*Res	    17	   816
+YexSi	1*YexSi	1*Res	   235	   816
+
+Estimates of components of variation
+Source	Estimate	Sq.root
+S(Ye)	  30.334	 5.5076
+S(Si)	  87.108	 9.3332
+S(YexSi)	  20.943	 4.5763
+V(Res)	  55.772	  7.468
+

@@ -1,0 +1,1303 @@
+---
+title: "SECREMP Coral"
+author: "Nick Jones"
+date: "2023-10-27"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+## SECREMP Coral Analysis 2013-2023 for ECRS paper
+```{r}
+library(dplyr)
+library(ggplot2)
+library(plotrix)
+library(tidyverse)
+library(glmmTMB)
+library(emmeans)
+library(DHARMa)
+library(ggridges)
+library(reshape2)
+library(MASS)
+library(performance)
+library(moments)
+library(devEMF)
+library(tidygam)
+library(tidymv)
+library(mgcv)
+```
+
+### Load and clean data
+
+```{r}
+
+data <- read.csv("C:\\Users\\nj350\\OneDrive - Nova Southeastern University\\Documents\\Conferences\\2024\\BEM\\Data\\SECREMP_Coral_2012-2023.csv")
+info <- read.csv("C:\\Users\\nj350\\OneDrive - Nova Southeastern University\\Documents\\PhD\\Chapter 3 - WQ community dynamics\\Data\\Site Info.csv")
+
+#data <- read.csv("C:\\Users\\phill\\OneDrive\\Documents\\Nick Working\\2024\\BEM\\Data\\SECREMP_Coral_2012-2023.csv")
+#info <- read.csv("C:\\Users\\phill\\OneDrive\\Documents\\Nick Working\\2024\\ECRS\\R\\Site Info short.csv")
+
+data$Site <- as.factor(data$Site)
+data$fYear <- as.factor(data$Year)
+data$Habitat <- as.factor(data$Habitat)
+data$Species <- as.factor(data$Species)
+data$Station <- as.factor(data$Station)
+
+juvs <- subset(data, Site != "Martin County 1" & Site != "Martin County 2" & Site != "Palm Beach 1" & Site != "Broward County A" &
+                 Diameter < 4)
+
+data <- subset(data, Site != "Martin County 1" & Site != "Martin County 2" & Site != "Palm Beach 1" & Site != "Broward County A" &
+                 Diameter >= 4)
+data$Site <- droplevels(data$Site)
+levels(data$Site)
+
+colony.counts <- group_by(data, Site, Year, Habitat) %>% count() #count by site
+juv.counts <- group_by(juvs, Site, Year, Habitat) %>% count() #juv count by site
+names(juv.counts) <- c("Site", "Year", "Habitat", "Juvs")
+
+colony.counts$Site <- factor(colony.counts$Site, levels = c("Palm Beach 2", "Palm Beach 3", "Palm Beach 4", "Palm Beach 5", 
+                                                            "Broward County 1", "Broward County 2", "Broward County 3", "Broward County 4", 
+                                                            "Broward County 5", "Broward County 6", "Dade County 1", "Dade County 2", 
+                                                            "Dade County 3", "Dade County 4", "Dade County 5", "Dade County 6", 
+                                                            "Dade County 7", "Dade County 8"))
+
+
+levels(colony.counts$Site) <- c("PB2", "PB3", "PB4", "PB5", "BC1", "BC2", "BC3", "BC4", "BC5", "BC6", "DC1", "DC2", "DC3", "DC4", "DC5", "DC6", "DC7", "DC8")
+
+colony.counts <- left_join(colony.counts, info, by = "Site")
+
+colony.counts$fYear <- as.factor(colony.counts$Year)
+
+colony.13 <- subset(colony.counts, fYear != "2012")
+colony.year <- group_by(colony.13, Year) %>% summarise(Mean = mean(n/88), SE = std.error(n/88))
+
+```
+
+### Density by Species Figure 
+
+#### Figure based on site level data
+
+```{r}
+
+data$Species.2 <-  ifelse(data$Species == "AAGA", "AAGA",
+                      ifelse(data$Species == "ACER", "ACER",  
+                        ifelse(data$Species =="MCAV", "MCAV", 
+                          ifelse(data$Species =="PAST", "PAST", 
+                            ifelse(data$Species =="PPOR", "PPOR", 
+                              ifelse(data$Species =="SSID", "SSID", 
+                                ifelse(data$Species =="MMEA", "MMEA",
+                                  ifelse(data$Species =="MDEC", "MDEC","Rare"))))))))
+
+coral.species <- subset(data, Year != 2012)
+
+coral.species$Species.2 <- factor(coral.species$Species.2, 
+                                  levels = c("SSID","PAST", "AAGA", "PPOR",  
+                                             "MCAV","ACER", "MMEA", "MDEC","Rare"))
+
+species.counts <- group_by(coral.species, Year, Habitat, Subregion, Site, Species.2) %>% 
+  count()
+
+#add a row for each combo of site and species.2 so that a zero count is added if the species not at a site, 
+#expand.grid creates a data frame with all combinations of the factors
+
+all.species <- expand.grid(Site = unique(species.counts$Site), 
+                           Year = unique(species.counts$Year), 
+                           Species.2 = unique(species.counts$Species.2))
+
+#merges the expanded grid with the data and says keep all of the levels
+species.counts <- merge(all.species, species.counts, by = c('Site', 'Year', 'Species.2'), all.x = TRUE)
+
+#assigns all na values 0 so sites with no colonies have a 0
+species.counts$n[is.na(species.counts$n)] <- 0
+
+species.counts$Density <- species.counts$n/88
+
+density.year.total <- coral.species %>%
+  group_by(Year, Species.2) %>%
+count()
+
+density.year.over50 <- coral.species %>%
+  subset(Diameter > 50)%>%
+  group_by(Year, Species.2) %>%
+count()
+
+```
+
+### Temporal change in Coral Density
+
+```{r}
+
+density.year <- species.counts %>%
+  subset(Species.2 == "MCAV"|
+         Species.2 == "MMEA"|  
+         Species.2 == "Rare"|
+         Species.2 == "PAST"|
+         Species.2 == "SSID"|
+         Species.2 == "AAGA") %>%
+  group_by(Year, Species.2) %>%
+  summarise(Mean = mean(Density), SE = std.error(Density))
+
+print(density.year)
+
+species_lab <- c("MCAV" = "Montastraea cavernosa", 
+                 "PAST" = "Porites astreoides", 
+                 "SSID" = "Siderastrea siderea",
+                 "AAGA" = "Agaricia agaricites",
+                 "Rare" = "SCTLD susceptible",
+                 "PPOR" = "Porites porites",
+                 "ACER" = "Acropora cervicornis",
+                 "MMEA" = "Meandrina meandrites",
+                 "MDEC" = "Madracis decactis")
+```
+
+### Add Juveniles
+
+```{r}
+
+juvs <- read.csv("C:\\Users\\nj350\\OneDrive - Nova Southeastern University\\Documents\\Conferences\\2024\\ECRS\\R\\Juvenile Corals 2-4cm.csv")
+
+#juvs <- read.csv("C:\\Users\\phill\\OneDrive\\Documents\\Nick Working\\2024\\ECRS\\R\\Juvenile Corals 2-4cm.csv")
+
+juvs$Site <- as.factor(juvs$Site)
+juvs$fYear <- as.factor(juvs$Year)
+juvs$Habitat <- as.factor(juvs$Habitat)
+juvs$Species <- as.factor(juvs$Species)
+juvs$Station <- as.factor(juvs$Station)
+
+juvs$Species.2 <-  ifelse(juvs$Species == "AAGA", "AAGA",
+                        ifelse(juvs$Species == "ACER", "ACER",  
+                                   ifelse(juvs$Species =="MCAV", "MCAV", 
+                                          ifelse(juvs$Species =="PAST", "PAST", 
+                                                 ifelse(juvs$Species =="PPOR", "PPOR", 
+                                                               ifelse(juvs$Species =="SSID", "SSID", 
+                                                                              ifelse(juvs$Species =="MMEA", "MMEA",
+                                                                      ifelse(juvs$Species =="MDEC", "MDEC","Rare"))))))))
+
+juvs$Species.2 <- factor(juvs$Species.2, 
+                                  levels = c("SSID","PAST", "AAGA", "PPOR",  
+                                             "MCAV","ACER", "MMEA", "MDEC","Rare"))
+
+juvs.site <- juvs %>%
+   group_by(Year, Site, Habitat, Subregion, Species.2) %>%
+  count()
+
+all.juvs <- expand.grid(Site = unique(juvs.site$Site), 
+                           Year = unique(juvs.site$Year), 
+                           Species.2 = unique(juvs.site$Species.2))
+
+#merges the expanded grid with the data and says keep all of the levels
+juvs.site <- merge(all.juvs, juvs.site, by = c('Site', 'Year', 'Species.2'), all.x = TRUE) %>%
+  dplyr::select(Year, Site, Habitat, Subregion, Species.2, n)
+
+juvs.site$n[is.na(juvs.site$n)] <- 0
+
+juvs.site$Density <- juvs.site$n/88
+
+juvs.site$Lifestage <- "Juvenile"
+
+juvs.site <- juvs.site %>%
+  dplyr::select(Site, Year, Species.2, Habitat, Subregion, n, Density, Lifestage)
+
+```
+
+### Add Recruits
+
+```{r}
+recruits <- read.csv("C:\\Users\\nj350\\OneDrive - Nova Southeastern University\\Documents\\Conferences\\2024\\BEM\\Data\\Recruits 2018-2023.csv")
+
+#recruits <- read.csv("C:\\Users\\phill\\OneDrive\\Documents\\Nick Working\\2024\\BEM\\Data\\Recruits 2018-2023.csv")
+
+recruits$Site <- as.factor(recruits$Site)
+recruits$fYear <- as.factor(recruits$Year)
+recruits$Habitat <- as.factor(recruits$Habitat)
+recruits$Species <- as.factor(recruits$Species)
+recruits$Station <- as.factor(recruits$Station)
+
+recruits <- subset(recruits, Site != "Martin County 1" & Site != "Martin County 2" & Site != "Palm Beach 1" & Site != "Broward County A")
+recruits$Site <- droplevels(recruits$Site)
+recruits$Station <- droplevels(recruits$Station)
+
+recruits$Species.2 <-  ifelse(recruits$Species == "AAGA", "AAGA",
+                        ifelse(recruits$Species == "ACER", "ACER",  
+                          ifelse(recruits$Species =="MCAV", "MCAV", 
+                            ifelse(recruits$Species =="PAST", "PAST", 
+                              ifelse(recruits$Species =="PPOR", "PPOR", 
+                                ifelse(recruits$Species =="SSID", "SSID", 
+                                  ifelse(recruits$Species =="MMEA", "MMEA",
+                                    ifelse(recruits$Species =="MDEC", "MDEC","Rare"))))))))
+
+recruits$Species.2 <- factor(recruits$Species.2, 
+                                  levels = c("SSID","PAST", "AAGA", "PPOR",  
+                                             "MCAV","ACER", "MMEA", "MDEC","Rare"))
+
+station.info <- read.csv("C:\\Users\\nj350\\OneDrive - Nova Southeastern University\\Documents\\Conferences\\2024\\BEM\\Data\\Station Info.csv")
+
+#station.info <- read.csv("C:\\Users\\phill\\OneDrive\\Documents\\Nick Working\\2024\\BEM\\Data\\Station Info.csv")
+
+station.info <- station.info %>%
+  dplyr::select(Site, Station, Transect)
+
+station.info$Site <- as.factor(station.info$Site)
+station.info$Station <- as.factor(station.info$Station)
+station.info$Transect <- as.factor(station.info$Transect)
+
+station.info <- subset(station.info, Site != "Martin County 1" & Site != "Martin County 2" & Site != "Palm Beach 1" & Site != "Broward County A")
+station.info$Site <- droplevels(station.info$Site)
+station.info$Station <- droplevels(station.info$Station)
+
+recruits <- left_join(recruits, station.info, by = c("Site", "Station"))
+
+all.species <- expand.grid(Site = unique(recruits$Site), 
+                           Year = unique(recruits$Year), 
+                           Species.2 = unique(recruits$Species.2))
+
+#need to average by species.2 because there are multiple species within the "Rare" category for species.2, otherwise the merge below will create duplicate rows with empty abundances. 
+#Need to sum the abundance by site to fit with other data too
+
+recruits.species.2 <- recruits %>%
+  group_by(Year, Site, Habitat, Subregion, Species.2) %>%
+  summarise(Abundance = round(sum(Abundance), 0))
+
+#merges the expanded grid with the data and says keep all of the levels
+recruit.counts <- merge(all.species, recruits.species.2, by = c('Site', 'Year', 'Species.2'), all.x = TRUE) %>%
+  dplyr::select(Year, Site, Habitat, Subregion, Species.2, Abundance)
+
+names(recruit.counts) <- c("Year", "Site", "Habitat", "Subregion", "Species.2", "n")
+#assigns all na values 0 so sites with no colonies have a 0
+recruit.counts$n[is.na(recruit.counts$n)] <- 0
+
+recruit.counts$Density <- recruit.counts$n/88 #whole site density so need to divide by 88m
+recruit.counts$Lifestage <- "Recruit"
+
+recruit.counts <- recruit.counts %>%
+  dplyr::select(Site, Year, Species.2, Habitat, Subregion, n, Density, Lifestage)
+
+```
+
+###Combine recruit, juvenile and adult abundance/density datasets
+
+```{r}
+
+species.counts$Lifestage <- "Adult"
+
+all.corals <- rbind(species.counts, recruit.counts, juvs.site)
+
+#mean density by species and lifestage over the study
+density.summary <- all.corals %>%
+  subset(Species.2 == "MCAV"|
+         Species.2 == "MMEA"|  
+         Species.2 == "PAST"|
+         Species.2 == "SSID") %>%
+  group_by(Species.2, Lifestage) %>%
+  summarise(Mean = mean(Density), SE = std.error(Density))
+
+print(density.summary)
+
+#mean density by year, species and lifestage
+density.year2 <- all.corals %>%
+  subset(Species.2 == "MCAV"|
+         Species.2 == "MMEA"|  
+         Species.2 == "PAST"|
+         Species.2 == "SSID") %>%
+  group_by(Year, Species.2, Lifestage) %>%
+  summarise(Mean = mean(Density), SE = std.error(Density), Abundance = sum(n))
+
+print(density.year2)
+
+#site level change by year
+Relative_Change.all <- all.corals %>%
+    arrange(Species.2, Lifestage, Site, Year) %>% group_by(Site, Species.2, Lifestage) %>%  
+  mutate(Adult.rel.change = (((n - lag(n))/lag(n))*100),
+         Adult.abs.change = (n-lag(n))) %>%
+  na.omit()
+
+species_lab <- c("MCAV" = "Montastraea cavernosa", 
+                 "PAST" = "Porites astreoides", 
+                 "SSID" = "Siderastrea siderea",
+                 "MMEA" = "Meandrina meandrites")
+
+density.year2$Lifestage <- as.factor(density.year2$Lifestage)
+
+lty <- c("1","2","3")
+
+ggplot(density.year2)+
+  geom_line(aes(x = Year, y = Mean, lty = Lifestage), stat = "identity", size = 1)+
+  scale_y_continuous(expand = c(0, 0)) +
+#  geom_vline(xintercept = c(2010, 2012), lty = 2, colour = "deepskyblue1", size = 1)+
+  facet_wrap(~Species.2, labeller = labeller(Species.2 = species_lab), nrow = 2)+
+    labs(y = bquote('Density' ~~ ('colonies'~~ m^-2)), x = "")+
+  scale_x_continuous(breaks = c(2003, 2005, 2007, 2009, 2011, 2013, 2015, 2017, 2019, 2021, 2023))+
+     theme_bw()+
+  scale_linetype_manual(labels = c(expression("Adult (">="4cm)"), "Juvenile (2-4cm)", "Recruit (< 2cm)"),
+                        values = c("solid", "dotted", "dashed"))+
+  theme(axis.text.y = element_text(size = 12, hjust = 1, colour = "black"),
+        axis.title.x = element_blank(), 
+        axis.title.y = element_text(size = 16), 
+        axis.text.x = element_text(size = 12, colour = "black",angle = 45, vjust = 1, hjust = 0.8),
+        plot.margin = margin(rep(15, 4)), 
+        axis.line = element_line(size = c(0.5, 0.5, 0.5, 0.5)), 
+        panel.grid.major.x = element_blank(), 
+        strip.text = element_text(size = 15, face = "bold.italic"), 
+        strip.background = element_rect(size=0.5),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        strip.text.y = element_blank(),
+        legend.position = c(0.88, 0.35),
+        legend.title = element_blank(),
+        legend.text = element_text(size = 10))+
+ geom_errorbar(aes(ymin = Mean-SE, ymax = Mean+SE, x = Year), color = "Black",
+                size = 0.5, width = 0.25, alpha = 0.5)+
+   geom_segment(aes(x = 2014.5, y = 0, xend = 2014.5, yend = 0.7), 
+               lty = 3, colour = "red", linewidth = 1)+
+   geom_segment(aes(x = 2015.5, y = 0, xend = 2015.5, yend = 0.7), 
+               lty = 3, colour = "red", linewidth = 1)+
+ geom_segment(aes(x = 2022.5, y = 0, xend = 2022.5, yend = 0.7), 
+               lty = 3, colour = "red", linewidth = 1)+
+  geom_segment(aes(x = 2017.7, y = 0, xend = 2017.7, yend = 0.7), 
+              lty = 2, colour = "deepskyblue1", linewidth = 1)+
+  geom_segment(aes(x = 2022.7, y = 0, xend = 2022.7, yend = 0.7), 
+               lty = 2, colour = "deepskyblue1", linewidth = 1)+
+  geom_segment(aes(x = 2014, y = 0.7, xend = 2018, yend = 0.7), arrow = arrow(length = unit(0.5, "cm")), 
+                              lty = 1, colour = "green3", linewidth = 1)
+#ggsave(file = "Coral Density and recruits.png", width = 8, height = 6, dpi = 300)
+
+```
+
+## Model Temporal change in coral species density
+
+#### Model at station level
+####too complex to model all together, do each independently
+
+```{r}
+station.info <- read.csv("C:\\Users\\nj350\\OneDrive - Nova Southeastern University\\Documents\\Conferences\\2024\\BEM\\Data\\Station Info.csv")
+
+#station.info <- read.csv("C:\\Users\\phill\\OneDrive\\Documents\\Nick Working\\2024\\BEM\\Data\\Station Info.csv")
+
+station.info$Station <- as.factor(station.info$Station)
+station.info$Transect <- as.factor(station.info$Transect)
+
+station.counts <- left_join(coral.species, station.info, by = c("Site", "Station"))
+station.sum <- group_by(station.counts, Year, Habitat, Subregion, Site, Transect, Species.2) %>% 
+  count()
+
+#add a row for each combo of site and species.2 so that a zero count is added if the species not at a site, 
+#expand.grid creates a data frame with all combinations of the factors
+
+all.stations <- expand.grid(Site = unique(station.sum$Site), Transect = unique(station.sum$Transect), 
+                           Year = unique(station.sum$Year), Species.2 = unique(station.sum$Species.2))
+
+#merges the expanded grid with the data and says keep all of the levels
+station.sum <- merge(all.stations, station.sum, by = c('Site', 'Transect', 'Year', 'Species.2'), all.x = TRUE)
+
+#assigns all na values 0 so sites with no colonies have a 0
+station.sum$n[is.na(station.sum$n)] <- 0
+
+station.sum$fYear <- as.factor(station.sum$Year)
+
+station.sum$Station <- paste(station.sum$Site, station.sum$Transect, sep = "_")
+station.sum$Station <- as.factor(station.sum$Station)
+
+site.species.data <- station.sum %>%
+  group_by(Site, fYear, Species.2) %>%
+  summarise(n = sum(n)) %>%
+  subset(Species.2 != "ACER" & Species.2 != "MDEC" & Species.2 != "PPOR" & Species.2 != "MMEA")
+site.species.data$Species.2 <- droplevels(site.species.data$Species.2)
+levels(site.species.data$Species.2)
+levels(site.species.data$Site)
+levels(site.species.data$fYear)
+
+```
+
+### SSID Model - modelled at station level
+```{r, fig.show='hide'}
+ssid <- subset(station.sum, Species.2 == "SSID")
+
+ssid$Species.2 <- droplevels(ssid$Species.2)
+levels(ssid$Species.2)
+levels(ssid$fYear)
+hist(ssid$n)
+
+mod.1 <- glmmTMB(n ~ fYear + (1|Site/Station), 
+                          family = poisson, data = ssid)
+
+mod.1a <- glmmTMB::glmmTMB(n ~ fYear + (1|Site/Station), 
+                          family = nbinom1(), data = ssid)
+
+mod.1b <- glmmTMB::glmmTMB(n ~ fYear + (1|Site/Station), 
+                          family = nbinom2(), data = ssid)
+
+AIC(mod.1, mod.1a, mod.1b) #poisson fYear
+
+summary(mod.1)
+
+sims <- simulateResiduals(mod.1, n = 1000)
+plot(sims) #looks good
+testDispersion(sims) #dispersion fine
+testOutliers(sims, type = "bootstrap") #no outliers present
+
+library(performance)
+
+r2(mod.1) # Conditional R2: 0.691
+           #Marginal R2: 0.113
+
+emm.ssid <- emmeans(mod.1, ~ fYear)
+pairs(emm.ssid)
+contrast(emm.ssid)
+plot(emm.ssid)
+
+```
+
+### PAST Model
+```{r, fig.show='hide'}
+past <- subset(station.sum, Species.2 == "PAST")
+
+past$Species.2 <- droplevels(past$Species.2)
+
+hist(past$n)
+
+mod.1 <- glmmTMB(n ~ fYear + (1|Site/Station), 
+                          family = poisson, data = past)
+
+mod.1a <- glmmTMB::glmmTMB(n ~ fYear + (1|Site/Station), 
+                          family = nbinom1(), data = past)
+
+mod.1b <- glmmTMB::glmmTMB(n ~ fYear + (1|Site/Station), 
+                          family = nbinom2(), data = past)
+
+AIC(mod.1, mod.1a, mod.1b) #poisson fYear
+
+summary(mod.1)
+
+sims <- simulateResiduals(mod.1, n = 1000)
+plot(sims) #evidence of lack of uniormity in resid distribution
+testUniformity(sims) #distribution of residuals off
+testDispersion(sims) #dispersion fine
+testOutliers(sims, type = "bootstrap") #no outliers present
+
+library(performance)
+
+r2(mod.1) # Conditional R2: 0.944
+           #Marginal R2: 0.018
+
+emm.past <- emmeans(mod.1, ~ fYear)
+pairs(emm.past)
+plot(emm.past)
+
+```
+
+### MCAV Model
+```{r, fig.show='hide'}
+MCAV <- subset(station.sum, Species.2 == "MCAV")
+
+MCAV$Species.2 <- droplevels(MCAV$Species.2)
+levels(MCAV$Species.2)
+levels(MCAV$fYear)
+hist(MCAV$n)
+
+mod.1 <- glmmTMB(n ~ fYear + (1|Site/Station), 
+                          family = poisson, data = MCAV)
+
+mod.1a <- glmmTMB::glmmTMB(n ~ fYear + (1|Site/Station), 
+                          family = nbinom1(), data = MCAV)
+
+mod.1b <- glmmTMB::glmmTMB(n ~ fYear + (1|Site/Station), 
+                          family = nbinom2(), data = MCAV)
+
+AIC(mod.1, mod.1a, mod.1b) #negative binomial fYear
+
+summary(mod.1b)
+
+sims <- simulateResiduals(mod.1b, n = 1000)
+plot(sims) #look GOOD
+testDispersion(sims) #dispersion fine
+testOutliers(sims, type = "bootstrap") #no outliers present
+
+library(performance)
+
+r2(mod.1b) # Conditional R2: 0.778
+           #Marginal R2: 0.066
+
+emm.MCAV <- emmeans(mod.1b, ~ fYear)
+pairs(emm.MCAV)
+plot(emm.MCAV)
+
+```
+
+### MMEA Model
+```{r, fig.show='hide'}
+MMEA <- subset(station.sum, Species.2 == "MMEA")
+
+MMEA$Species.2 <- droplevels(MMEA$Species.2)
+levels(MMEA$Species.2)
+levels(MMEA$fYear)
+hist(MMEA$n)
+
+mod.1 <- glmmTMB(n ~ fYear + (1|Site/Station), 
+                          family = poisson, data = MMEA)
+
+mod.1a <- glmmTMB::glmmTMB(n ~ fYear + (1|Site/Station), 
+                          family = nbinom1(), data = MMEA)
+
+mod.1b <- glmmTMB::glmmTMB(n ~ fYear + (1|Site/Station), 
+                          family = nbinom2(), data = MMEA)
+
+AIC(mod.1, mod.1a, mod.1b) #POISSON BEST
+
+summary(mod.1)
+
+sims <- simulateResiduals(mod.1, n = 1000)
+plot(sims) #look GOOD
+testDispersion(sims) #dispersion fine
+testOutliers(sims, type = "bootstrap") #no outliers present
+
+r2(mod.1) # Conditional R2: 0.641
+           #Marginal R2: 0.340
+
+emm.MMEA <- emmeans(mod.1, ~ fYear)
+pairs(emm.MMEA)
+plot(emm.MMEA)
+
+```
+
+### Recruits
+
+#### This is analysed at site level, due to low abundance and too much variation by transect
+
+```{r, fig.show='hide'}
+
+all.corals$fYear <- as.factor(all.corals$Year)
+
+```
+
+### SSID Model
+
+```{r}
+rec.mod.dat <- subset(all.corals, Lifestage == "Recruit" & Year > 2017 & Species.2 == "SSID")
+
+mod.1.rec <- glmmTMB(n ~ fYear + (1|Site), 
+                          family = poisson, data = rec.mod.dat)
+
+mod.1a.rec <- glmmTMB::glmmTMB(n ~ fYear+ (1|Site), 
+                          family = nbinom1(), data = rec.mod.dat)
+
+mod.1b.rec <- glmmTMB::glmmTMB(n ~ fYear+ (1|Site), 
+                          family = nbinom2(), data = rec.mod.dat)
+
+AIC(mod.1.rec, mod.1a.rec, mod.1b.rec) #negative binomial fYear
+
+summary(mod.1b.rec)
+
+sims <- simulateResiduals(mod.1b.rec, n = 1000)
+plot(sims) #looks good
+testDispersion(sims) #dispersion fine
+testOutliers(sims, type = "bootstrap") #no outliers present
+
+library(performance)
+
+r2(mod.1b.rec) 
+
+emm.rec <- emmeans(mod.1b.rec, ~ fYear)
+pairs(emm.rec)
+contrast(emm.rec)
+plot(emm.rec)
+
+```
+
+### PAST Model
+
+```{r, fig.show='hide'}
+
+PAST.mod.dat <- subset(all.corals, Lifestage == "Recruit" & Year > 2017 & Species.2 == "PAST")
+
+mod.1.rec <- glmmTMB(n ~ fYear + (1|Site), 
+                          family = poisson, data = PAST.mod.dat)
+
+mod.1a.rec <- glmmTMB::glmmTMB(n ~ fYear+ (1|Site), 
+                          family = nbinom1(), data = PAST.mod.dat)
+
+mod.1b.rec <- glmmTMB::glmmTMB(n ~ fYear+ (1|Site), 
+                          family = nbinom2(), data = PAST.mod.dat)
+
+AIC(mod.1.rec, mod.1a.rec, mod.1b.rec) #negative binomial fYear
+
+summary(mod.1.rec)
+
+sims <- simulateResiduals(mod.1.rec, n = 1000)
+plot(sims) #looks good
+testDispersion(sims) #dispersion fine
+testOutliers(sims, type = "bootstrap") #no outliers present
+
+r2(mod.1b.rec) 
+
+emm.rec <- emmeans(mod.1b.rec, ~ fYear)
+pairs(emm.rec)
+contrast(emm.rec)
+plot(emm.rec)
+
+```
+
+### MCAV Model
+
+```{r, fig.show='hide'}
+
+MCAV.mod.dat <- subset(all.corals, Lifestage == "Recruit" & Year > 2017 & Species.2 == "MCAV")
+
+mod.1.rec <- glmmTMB(n ~ fYear + (1|Site), 
+                          family = poisson, data = MCAV.mod.dat)
+
+mod.1a.rec <- glmmTMB::glmmTMB(n ~ fYear+ (1|Site), 
+                          family = nbinom1(), data = MCAV.mod.dat)
+
+mod.1b.rec <- glmmTMB::glmmTMB(n ~ fYear+ (1|Site), 
+                          family = nbinom2(), data = MCAV.mod.dat)
+
+AIC(mod.1.rec, mod.1a.rec, mod.1b.rec) #negative binomial fYear
+
+summary(mod.1b.rec)
+
+sims <- simulateResiduals(mod.1b.rec, n = 1000)
+plot(sims) #looks good
+testDispersion(sims) #dispersion fine
+testOutliers(sims, type = "bootstrap") #no outliers present
+
+r2(mod.1b.rec)
+
+emm.rec <- emmeans(mod.1b.rec, ~ fYear)
+pairs(emm.rec)
+contrast(emm.rec)
+plot(emm.rec)
+
+```
+
+### MMEA Model
+
+```{r, fig.show='hide'}
+
+MMEA.mod.dat <- subset(all.corals, Lifestage == "Recruit" & Year > 2017 & Species.2 == "MMEA")
+
+MMEA.mod.dat$fYear <- as.factor(MMEA.mod.dat$Year)
+
+mod.1.rec <- glmmTMB(n ~ fYear + (1|Site), 
+                          family = poisson, data = MMEA.mod.dat)
+
+mod.1a.rec <- glmmTMB::glmmTMB(n ~ fYear+ (1|Site), 
+                          family = nbinom1(), data = MMEA.mod.dat)
+
+mod.1b.rec <- glmmTMB::glmmTMB(n ~ fYear+ (1|Site), 
+                          family = nbinom2(), data = MMEA.mod.dat)
+
+AIC(mod.1.rec, mod.1a.rec, mod.1b.rec) #negative binomial fYear
+
+summary(mod.1.rec)
+
+sims <- simulateResiduals(mod.1.rec, n = 1000)
+plot(sims) #looks good
+testDispersion(sims) #dispersion fine
+testOutliers(sims, type = "bootstrap") #no outliers present
+
+r2(mod.1.rec) 
+
+emm.rec <- emmeans(mod.1.rec, ~ fYear)
+pairs(emm.rec)
+contrast(emm.rec)
+plot(emm.rec)
+
+```
+
+
+### Frequency distribution by coral species
+
+```{r}
+
+target.species <- coral.species %>%
+  subset(Species.2 == "MCAV"|
+         Species.2 == "MMEA"|  
+         Species.2 == "PAST"|
+         Species.2 == "SSID")
+
+col.dist <- c("grey", "grey", "grey", "red3", "red3", "red3", "red3", "grey", "grey", "grey", "red3", "grey")
+
+ggplot(target.species, aes(x = log10(Diameter), y = fYear, fill = Species.2))+
+  geom_density_ridges(alpha = 0.75, quantile_lines=TRUE,
+                      quantile_fun=function(x,...)mean(x))+
+#  geom_vline(xintercept = 1, lty = 2)+
+  facet_wrap(~Species.2, nrow = 2, labeller = labeller(Species.2 = species_lab))+
+ # geom_text(aes(label = n, y = fYear), position = position_dodge(width = 0.9), vjust = 1, size = 3)+
+  theme_bw()+
+  theme(legend.position = "none",
+        axis.text.y = element_text(size = 12, hjust = 1, colour = "black"),
+        axis.title.x = element_text(size = 16, colour = "black"), 
+        axis.title.y = element_blank(), 
+        axis.text.x = element_text(size = 12, colour = "black"),
+        plot.margin = margin(rep(15, 4)), 
+        axis.line = element_line(size = c(0.5, 0.5, 0.5, 0.5)), 
+        panel.grid.major.x = element_blank(), 
+        strip.text = element_text(size = 15, face = "bold.italic"), 
+        strip.background = element_rect(size=0.5, fill = "lightgrey"),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        strip.text.y = element_blank())+
+        labs(x = "log10(Diameter) (cm)")+
+  scale_fill_manual(values = c("palegreen3", "palegreen3", "grey55", "grey55"))
+
+
+  scale_x_continuous(limits = c(-10, 100), breaks = c(0, 50, 100))
+
+#ggsave(file = "Coral Size Structure log10.png", width = 8, height = 6, dpi = 300)
+
+species.totals <- group_by(target.species, fYear, Species.2) %>% 
+  count() %>%
+  subset(fYear == "2013" | fYear == "2018" | fYear == "2023")
+
+Relative_Change <- species.totals %>% 
+  arrange(Species.2, fYear) %>%
+  group_by(Species.2) %>%  
+  mutate(Mean_change = (((n - lag(n))/lag(n))*100))
+
+print(Relative_Change, n = 30)
+```
+### Calculate length, CV, skew and kurtosis per site 
+##### Too many stations with no colonies and better representation of variation spatially by using sites
+
+```{r}
+
+Mean.Length.sp <- group_by(target.species, fYear, Year, Site, Habitat, Subregion, Species) %>%   summarise(Length = mean(Diameter), 
+            SE.Length = std.error(Diameter), 
+            SD.Length = sd(Diameter),
+            Max = max(Diameter), 
+            Median = median(Diameter), 
+            Height = max(Height), 
+            CV = (sd(log10(Diameter))/mean(log10(Diameter)))*100, #low indicates little variation, high indicates highly variable
+            Skew = skewness(log10(Diameter)),# measures level of asymmetry positive = more small colonies, negative = more large colonies
+            Kurt = kurtosis(log10(Diameter)))
+
+#there are na/nan when the skew or kurtosis couldn't be calculated at a site because there is only 1 individual. Changed these to 0 to reflect that there is no skew/kurtosis is flat and no cv
+
+Mean.Length.sp$Length[is.na(Mean.Length.sp$Length)] <- 0
+Mean.Length.sp$CV[is.na(Mean.Length.sp$CV)] <- 0
+Mean.Length.sp$Skew[is.na(Mean.Length.sp$Skew)] <- 0
+Mean.Length.sp$Kurt[is.na(Mean.Length.sp$Kurt)] <- 0
+
+Mean.Length.sp$fYear <- droplevels(Mean.Length.sp$fYear)
+Mean.Length.sp$Species <- droplevels(Mean.Length.sp$Species)
+
+#annual mean per species
+
+Mean.Length.sp %>%
+  group_by(Species) %>%
+  summarise(Length = mean(Length), 
+            CV = mean(CV),
+            Skew = mean(Skew),
+            Kurt = mean(Kurt))
+
+Mean.Length.sp %>%
+  group_by(Species) %>%
+  summarise(SE.L = std.error(Length), 
+            SE.CV = std.error(CV),
+            SE.Skew = std.error(Skew),
+            SE.Kurt = std.error(Kurt))
+
+```
+
+###Plot out the data
+
+```{r}
+
+ggplot(Mean.Length.sp)+
+  geom_point(aes(x = Year, y = Length), colour = "gray")+
+ geom_point(aes(x = Year, y = Length), shape = 1, colour = "black")+
+  facet_wrap(~Species)+
+  theme(legend.position = "none", 
+        axis.title.y = element_text(size = 12),
+        axis.text.y = element_text(size = 12, hjust = 1, colour = "black"),  
+        axis.text.x = element_text(size = 12, colour = "black"),
+        axis.title.x = element_blank(),
+        axis.line = element_line(colour = "black", size = 0.5), 
+        axis.ticks = element_blank(),
+        panel.border =  element_rect(size = 0.5, colour = "black", fill = NA),
+        plot.margin = ggplot2::margin(12,6),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        strip.background = element_blank(),
+        strip.text = element_text(size = 12),
+        panel.background = element_blank())
+
+ggplot(Mean.Length.sp) +
+  geom_point(aes(x = Year, y = CV), colour = "gray")+
+ geom_point(aes(x = Year, y = CV), shape = 1, colour = "black")+
+  facet_wrap(~Species)+
+  theme(legend.position = "none", 
+        axis.title.y = element_text(size = 12),
+        axis.text.y = element_text(size = 12, hjust = 1, colour = "black"),  
+        axis.text.x = element_text(size = 12, colour = "black"),
+        axis.title.x = element_blank(),
+        axis.line = element_line(colour = "black", size = 0.5), 
+        axis.ticks = element_blank(),
+        panel.border =  element_rect(size = 0.5, colour = "black", fill = NA),
+        plot.margin = ggplot2::margin(12,6),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        strip.background = element_blank(),
+        strip.text = element_text(size = 12),
+        panel.background = element_blank())
+
+ggplot(Mean.Length.sp) +
+   geom_point(aes(x = Year, y = Skew), colour = "gray")+
+ geom_point(aes(x = Year, y = Skew), shape = 1, colour = "black")+
+    facet_wrap(~Species)+
+  theme(legend.position = "none", 
+        axis.title.y = element_text(size = 12),
+        axis.text.y = element_text(size = 12, hjust = 1, colour = "black"),  
+        axis.text.x = element_text(size = 12, colour = "black"),
+        axis.title.x = element_blank(),
+        axis.line = element_line(colour = "black", size = 0.5), 
+        axis.ticks = element_blank(),
+        panel.border =  element_rect(size = 0.5, colour = "black", fill = NA),
+        plot.margin = ggplot2::margin(12,6),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        strip.background = element_blank(),
+        strip.text = element_text(size = 12),
+        panel.background = element_blank())
+
+ggplot(Mean.Length.sp) +
+  geom_point(aes(x = Year, y =Kurt), colour = "gray")+
+ geom_point(aes(x = Year, y = Kurt), shape = 1, colour = "black")+
+    facet_wrap(~Species)+
+  theme(legend.position = "none", 
+        axis.title.y = element_text(size = 12),
+        axis.text.y = element_text(size = 12, hjust = 1, colour = "black"),  
+        axis.text.x = element_text(size = 12, colour = "black"),
+        axis.title.x = element_blank(),
+        axis.line = element_line(colour = "black", size = 0.5), 
+        axis.ticks = element_blank(),
+        panel.border =  element_rect(size = 0.5, colour = "black", fill = NA),
+        plot.margin = ggplot2::margin(12,6),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        strip.background = element_blank(),
+        strip.text = element_text(size = 12),
+        panel.background = element_blank())
+```
+
+### Analyse interspecific and temporal variation in length, CV, skew, kurtosis
+
+```{r, fig.show='hide'}
+
+ggplot(target.species)+
+  geom_histogram(aes(x = Diameter))+
+  facet_wrap(~Species)
+
+#dispersion quite variable by species and year, initial modelling with no dispersion parameter confirmed this. Fit a dispersion parameter. 
+  
+length.mod1 <- glmmTMB(log10(Diameter) ~ Species * fYear + (1|Site/Station), family = Gamma(log), data = target.species)
+
+length.mod2 <- glmmTMB(Diameter ~ Species + fYear + (1|Site/Station), family = Gamma(log), data = target.species)
+
+length.mod3 <- glmmTMB(Diameter ~ Species + (1|Site/Station), family = Gamma(log), data = target.species)
+
+length.mod4 <- glmmTMB(Diameter ~ fYear + (1|Site/Station), family = Gamma(log), data = target.species)
+
+length.mod5 <- glmmTMB(Diameter ~  (1|Site/Station), family = Gamma(log), data = target.species)
+
+AIC(length.mod1, length.mod2, length.mod3, length.mod4, length.mod5)
+
+summary(length.mod1)
+
+```
+
+```{r, fig.show='hide'}
+sims <- simulateResiduals(length.mod1, n = 1000)
+plot(sims) #looks horrendous
+testOutliers(sims, type = "bootstrap") #some outliers but not horrendous, 159 in 16574
+
+resids.site <- recalculateResiduals(sims, group = target.species$Site)
+plot(resids.site)#dispersion looks rough
+plotResiduals(resids.site, resids.site$Species) #major dispersion
+testOutliers(resids.site, type = "bootstrap") #outliers fine
+
+```
+
+```{r, fig.show='hide'}
+length.mod1.var <- glmmTMB(Diameter ~ Species * fYear + (1|Site/Station), 
+                       family = Gamma(log), data = target.species,
+                       dispformula = ~Species)
+
+sims <- simulateResiduals(length.mod1.var, n = 1000)
+plot(sims) #looks horrendous
+
+resids.site <- recalculateResiduals(sims, group = target.species$Site)
+plot(resids.site)#dispersion looks rough
+plotResiduals(resids.site, resids.site$Species) #major dispersion
+testOutliers(resids.site, type = "bootstrap")
+
+```
+##### Maybe analysing each species individually will fit better, they are very different
+
+### MCAV
+```{r, fig.show='hide'}
+
+mcav.length <- subset(target.species, Species == "MCAV")
+#dispersion quite variable by species and year, initial modelling with no dispersion parameter confirmed this. Fitting with a dispersion parameter didn't improve model fit so model each species independently. 
+  
+length.mod1 <- glmmTMB(Diameter ~ fYear + (1|Site/Station), family = Gamma(log), data = mcav.length)
+
+length.mod2 <- glmmTMB(Diameter ~ (1|Site/Station), family = Gamma(log), data = mcav.length)
+
+AIC(length.mod1, length.mod2)
+
+summary(length.mod1)
+
+```
+
+```{r, fig.show='hide'}
+sims <- simulateResiduals(length.mod1, n = 1000)
+plot(sims) #looks better
+
+resids.site <- recalculateResiduals(sims, group = mcav.length$Site)
+plot(resids.site)#dispersion looks good
+plotResiduals(resids.site, resids.site$fYear) #no dispersion
+testOutliers(resids.site, type = "bootstrap") #outliers fine
+
+```
+```{r}
+r2(length.mod1) #use model without dispersion formula for R2
+
+emm.mcav <- emmeans(length.mod1, ~ fYear)
+pairs(emm.mcav)
+contrast(emm.mcav)
+
+```
+### SSID - lots of variability per site and some sites just have little ones, there calculated mean diameter per site, per year and modelled this
+```{r, fig.show='hide'}
+
+SSID.length <- subset(target.species, Species == "SSID") %>%
+  group_by(Site, fYear) %>%
+  summarise(Diameter = mean(Diameter))
+#dispersion quite variable by species and year, initial modelling with no dispersion parameter confirmed this. Fitting with a dispersion parameter didn't improve model fit so model each species independently. 
+hist(SSID.length$Diameter)
+  
+length.mod1 <- glmmTMB(Diameter ~ fYear + (1|Site), family = Gamma(log), data = SSID.length)
+
+length.mod2 <- glmmTMB(Diameter ~ (1|Site), family = Gamma(log), data = SSID.length)
+
+AIC(length.mod1, length.mod2)
+
+summary(length.mod1)
+
+```
+
+```{r, fig.show='hide'}
+sims <- simulateResiduals(length.mod1, n = 1000)
+plot(sims) #looks pretty rough, check random residuals
+
+#this looks acceptable
+
+```
+```{r}
+r2(length.mod1) #use model without dispersion formula for R2
+
+emm.SSID <- emmeans(length.mod1, ~ fYear)
+pairs(emm.SSID)
+contrast(emm.SSID)
+
+```
+### PAST
+```{r, fig.show='hide'}
+
+PAST.length <- subset(target.species, Species == "PAST")
+#dispersion quite variable by species and year, initial modelling with no dispersion parameter confirmed this. Fitting with a dispersion parameter didn't improve model fit so model each species independently. 
+  
+length.mod1 <- glmmTMB(Diameter ~ fYear + (1|Site/Station), family = Gamma(log), data = PAST.length)
+
+length.mod2 <- glmmTMB(Diameter ~ (1|Site/Station), family = Gamma(log), data = PAST.length)
+
+AIC(length.mod1, length.mod2)
+
+summary(length.mod1)
+
+```
+
+```{r, fig.show='hide'}
+sims <- simulateResiduals(length.mod1, n = 1000)
+plot(sims) #looks better
+
+resids.site <- recalculateResiduals(sims, group = PAST.length$Site)
+plot(resids.site)#dispersion looks a bit weird but says fine
+testOutliers(resids.site, type = "bootstrap") #outliers fine
+
+```
+```{r}
+r2(length.mod1) #use model without dispersion formula for R2
+
+emm.PAST <- emmeans(length.mod1, ~ fYear)
+pairs(emm.PAST)
+contrast(emm.PAST)
+
+```
+### MMEA
+```{r}
+
+MMEA.length <- subset(target.species, Species == "MMEA")
+#dispersion quite variable by species and year, initial modelling with no dispersion parameter confirmed this. Fitting with a dispersion parameter didn't improve model fit so model each species independently. 
+  
+length.mod1 <- glmmTMB(Diameter ~ fYear + (1|Site/Station), family = Gamma(log), data = MMEA.length)
+
+length.mod2 <- glmmTMB(Diameter ~ (1|Site/Station), family = Gamma(log), data = MMEA.length)
+
+AIC(length.mod1, length.mod2)
+
+summary(length.mod1)
+
+```
+
+```{r, fig.show='hide'}
+sims <- simulateResiduals(length.mod1, n = 1000)
+plot(sims) #heterogeneity in residual variance, check with random effect
+
+resids.site <- recalculateResiduals(sims, group = MMEA.length$Site)
+plot(resids.site)#dispersion looks good
+plotResiduals(resids.site, resids.site$fYear) #no dispersion
+testOutliers(resids.site, type = "bootstrap") #outliers fine
+
+```
+```{r}
+r2(length.mod1) #use model without dispersion formula for R2
+
+emm.MMEA <- emmeans(length.mod1, ~ fYear)
+pairs(emm.MMEA)
+contrast(emm.MMEA)
+
+```
+
+### CV
+```{r, fig.show='hide'}
+
+ggplot(Mean.Length.sp)+
+  geom_histogram(aes(x = CV))+
+  facet_wrap(~Species) # the distribution is actually relatively normal, except for the zero values which are when there is a single colony at a site. Suggest removing these
+
+CV.data <- subset(Mean.Length.sp, CV > 0)
+  
+ggplot(CV.data)+
+  geom_histogram(aes(x = CV))+
+  facet_wrap(~Species) # relatively normal, model as gaussian to start
+
+cv.mod1 <- glmmTMB(CV ~ Species * fYear + (1|Site), family = gaussian(identity), data = CV.data)
+
+cv.mod2 <- glmmTMB(CV ~ Species + fYear + (1|Site), family = gaussian(identity), data = CV.data)
+
+cv.mod3 <- glmmTMB(CV ~ Species + (1|Site), family = gaussian(identity), data = CV.data)
+
+cv.mod4 <- glmmTMB(CV ~ fYear + (1|Site), family = gaussian(identity), data = CV.data)
+
+cv.mod5 <- glmmTMB(CV ~  (1|Site), family = gaussian(identity), data = CV.data)
+
+AIC(cv.mod1, cv.mod2, cv.mod3, cv.mod4, cv.mod5)
+
+summary(cv.mod1) #large amount of site level variation, mcav and mmea have much larger variance than ssid and past
+
+```
+
+```{r, fig.show='hide'}
+sims <- simulateResiduals(cv.mod1, n = 1000)
+plot(sims) #looks pretty good, some evidence of lack of normality
+
+plotResiduals(sims, CV.data$fYear)
+plotResiduals(sims, CV.data$Species)
+
+#heterogeneity by species. Fit variance structure by species
+```
+
+```{r, fig.show='hide'}
+cv.mod1.var <- glmmTMB(CV ~ Species * fYear + (1|Site), family = gaussian(identity), data = CV.data,
+                   dispformula = ~Species)
+summary(cv.mod1.var)
+
+sims <- simulateResiduals(cv.mod1.var, n = 1000)
+plot(sims) #looks pretty good, some evidence of outliers
+
+plotResiduals(sims, CV.data$fYear)
+plotResiduals(sims, CV.data$Species)
+testOutliers(sims) #6 outliers, look like excessively large values, see what bootstrapping does
+testOutliers(sims, type = "bootstrap")#bootstrapping suggests not too much of a problem. Choose to leave outliers in as I don't want to remove data. See if post-hoc is sensible. Summary and all other diagnostics look fine
+
+res <- recalculateResiduals(sims, group = CV.data$fYear)
+testTemporalAutocorrelation(simulationOutput = res, time = unique(CV.data$fYear))#evidence of temporal autocorrelation, fit ar1
+
+cv.mod1.var.ar1 <- glmmTMB(CV ~ Species * fYear + (1|Site) +
+                            ar1(fYear-1|Site), family = gaussian(identity), data = CV.data, dispformula = ~Species)
+summary(cv.mod1.var.ar1)
+
+```
+
+```{r}
+
+r2(cv.mod1) #use model without dispersion formula for R2
+
+emm.cv <- emmeans(cv.mod1.var.ar1, ~ fYear|Species)
+pairs(emm.cv, type = "response")
+contrast(emm.cv)
+
+emm.sp <- emmeans(cv.mod1.var.ar1, ~ Species)
+pairs(emm.sp, type = "response")
+contrast(emm.sp)
+```
+### Skewness
+```{r, fig.show='hide'}
+
+ggplot(Mean.Length.sp)+
+  geom_histogram(aes(x = Skew))+
+  facet_wrap(~Species) # the distribution is actually relatively normal, for now leave the zero skew values in, there is no skew if only 1 colony
+
+skew.mod1 <- glmmTMB(Skew ~ Species * fYear + (1|Site), family = gaussian(identity), data = Mean.Length.sp)
+
+skew.mod2 <- glmmTMB(Skew ~ Species + fYear + (1|Site), family = gaussian(identity), data = Mean.Length.sp)
+
+skew.mod3 <- glmmTMB(Skew ~ Species + (1|Site), family = gaussian(identity), data = Mean.Length.sp)
+
+skew.mod4 <- glmmTMB(Skew ~ fYear + (1|Site), family = gaussian(identity), data = Mean.Length.sp)
+
+skew.mod5 <- glmmTMB(Skew ~  (1|Site), family = gaussian(identity), data = Mean.Length.sp)
+
+AIC(skew.mod1, skew.mod2, skew.mod3, skew.mod4, skew.mod5)
+
+summary(skew.mod1) #some variation by site but not huge, variance relatively high
+
+```
+```{r, fig.show='hide'}
+sims <- simulateResiduals(skew.mod1, n = 1000)
+plot(sims) #dispersion fine, some evidence of lack of normality, outlier and heteroscedasticity
+
+plotResiduals(sims, Mean.Length.sp$fYear) #year good
+plotResiduals(sims, Mean.Length.sp$Species) #major variation in dispersion by species
+
+#heterogeneity by species. Fit variance structure by species
+
+```
+```{r, fig.show='hide'}
+skew.mod1.var <- glmmTMB(Skew ~ Species * fYear + (1|Site), family = gaussian(identity), data = Mean.Length.sp, dispformula = ~Species)
+summary(skew.mod1.var)
+
+sims <- simulateResiduals(skew.mod1.var, n = 1000)
+plot(sims) #looks pretty good, some evidence of outliers
+
+plotResiduals(sims, Mean.Length.sp$fYear)
+plotResiduals(sims, Mean.Length.sp$Species) #MMEA a problem, remove the sites with zero variability
+
+skew.data <- subset(Mean.Length.sp, Skew != 0)
+
+skew.mod1.var2 <- glmmTMB(Skew ~ Species * fYear + (1|Site), family = gaussian(identity), data = skew.data, dispformula = ~Species)
+summary(skew.mod1.var2)
+
+sims <- simulateResiduals(skew.mod1.var2, n = 1000)
+plot(sims) #looks pretty good, slight variability in uniformity. Check each individually
+
+plotResiduals(sims, skew.data$fYear) #year good
+plotResiduals(sims, skew.data$Species) #looks good
+
+res <- recalculateResiduals(sims, group = skew.data$fYear)
+testTemporalAutocorrelation(simulationOutput = res, time = unique(skew.data$fYear)) #fine
+
+#Keep this model
+```
+```{r}
+
+#use model without dispersion formula for R2
+skew.mod <- glmmTMB(Skew ~ Species * fYear + (1|Site), family = gaussian(identity), data = skew.data)
+
+r2(skew.mod)
+
+emm.cv <- emmeans(skew.mod1.var2, ~ fYear|Species)
+pairs(emm.cv, type = "response")
+contrast(emm.cv)
+
+emm.sp <- emmeans(skew.mod1.var2, ~ Species)
+pairs(emm.sp, type = "response")
+contrast(emm.sp)
+```
+
+### Kurtosis
+```{r, fig.show='hide'}
+
+ggplot(Mean.Length.sp)+
+  geom_histogram(aes(x = Kurt))+
+  facet_wrap(~Species) # suggest gamma distribution, suggest removing the 0s
+
+kurt.data <- subset(Mean.Length.sp, Kurt > 0)
+  
+ggplot(kurt.data)+
+  geom_histogram(aes(x = Kurt))+
+  facet_wrap(~Species) # gamma
+
+kurt.mod1 <- glmmTMB(Kurt ~ Species * fYear + (1|Site), family = Gamma(log), data = kurt.data)
+
+kurt.mod2 <- glmmTMB(Kurt ~ Species + fYear + (1|Site), family = Gamma(log), data = kurt.data)
+
+kurt.mod3 <- glmmTMB(Kurt ~ Species + (1|Site), family = Gamma(log), data = kurt.data)
+
+kurt.mod4 <- glmmTMB(Kurt ~ fYear + (1|Site), family = Gamma(log), data = kurt.data)
+
+kurt.mod5 <- glmmTMB(Kurt ~  (1|Site), family = Gamma(log), data = kurt.data)
+
+AIC(kurt.mod1, kurt.mod2, kurt.mod3, kurt.mod4, kurt.mod5)
+
+summary(kurt.mod1) #not much site level variation
+
+```
+
+```{r, fig.show='hide'}
+sims <- simulateResiduals(kurt.mod1, n = 1000)
+plot(sims) #dispersion fine, some evidence of lack of normality, outlier and heteroscedasticity
+
+plotResiduals(sims, kurt.data$fYear) #year good
+plotResiduals(sims, kurt.data$Species) #major variation in dispersion by species
+
+#heterogeneity by species. Fit variance structure by species
+
+```
+
+```{r, fig.show='hide'}
+
+kurt.mod1.var <- glmmTMB(Kurt ~ Species * fYear + (1|Site), 
+                         family = Gamma(log), data = kurt.data, 
+                         dispformula = ~Species)
+
+sims <- simulateResiduals(kurt.mod1.var, n = 1000)
+plot(sims) #dispersion still off a bit
+testDispersion(sims)#suggests overdispersion despite fitting the variance structure, weird as the qqplot doesn't actually look bad
+testOutliers(sims)#6 outliers, could remove these, although I don't really want to remove outliers when testing variation in kurtosis which is testing the extremes
+
+plotResiduals(sims, kurt.data$fYear) #year good
+plotResiduals(sims, kurt.data$Species) #looks good
+
+#tried looking into the origins of the overdisperion, but couldn't find anything clear or similar problems on stackexchange etc - think a problem is the large number of 1s for sites with only a couple of colonies, the qqplot doesn't look bad, I've fitted the dispersion parameter and checking the 2 predictors indicates no problem, fittted 
+
+res <- recalculateResiduals(sims, group = kurt.data$fYear)
+testTemporalAutocorrelation(simulationOutput = res, time = unique(kurt.data$fYear))
+
+kurt.mod1.var.ar1 <- glmmTMB(Kurt ~ Species * fYear + (1|Site)+ 
+                               ar1(fYear-1|Site), 
+                             family = Gamma(log), data = kurt.data, 
+                             dispformula = ~Species)
+
+#Keep this model
+```
+
+```{r}
+
+#use model without dispersion formula for R2
+kurt.mod <- glmmTMB(Kurt ~ Species * fYear + (1|Site), family = Gamma(log), data = kurt.data)
+
+r2(kurt.mod)
+
+emm.kurt <- emmeans(kurt.mod1.var.ar1, ~ fYear|Species)
+pairs(emm.kurt)
+contrast(emm.kurt)
+
+emm.sp <- emmeans(kurt.mod1.var.ar1, ~ Species)
+pairs(emm.sp)
+contrast(emm.sp)
+```
